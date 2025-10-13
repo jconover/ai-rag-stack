@@ -12,6 +12,7 @@ help:
 	@echo "logs-backend   - View backend logs"
 	@echo "logs-ollama    - View Ollama logs"
 	@echo "pull-model     - Pull default Ollama model (llama3.1:8b)"
+	@echo "pull-model MODEL=<name> - Pull specific Ollama model"
 	@echo "pull-codellama - Pull CodeLlama model"
 	@echo "list-models    - List available Ollama models"
 	@echo "ingest         - Download and ingest DevOps documentation"
@@ -57,8 +58,13 @@ logs-ollama:
 	docker compose logs -f ollama
 
 pull-model:
-	@echo "Pulling llama3.1:8b model..."
-	docker exec ollama ollama pull llama3.1:8b
+	@if [ -z "$(MODEL)" ]; then \
+		echo "Pulling default llama3.1:8b model..."; \
+		docker exec ollama ollama pull llama3.1:8b; \
+	else \
+		echo "Pulling $(MODEL) model..."; \
+		docker exec ollama ollama pull $(MODEL); \
+	fi
 
 pull-codellama:
 	@echo "Pulling codellama:13b model..."
