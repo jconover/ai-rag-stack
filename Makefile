@@ -27,7 +27,7 @@ verify:
 
 setup:
 	@echo "Setting up environment..."
-	@cp -n .env.example .env || true
+	@cp --update=none .env.example .env || true
 	@mkdir -p data/docs data/custom
 	@echo "Setup complete! Edit .env if needed, then run 'make start'"
 
