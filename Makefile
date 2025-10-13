@@ -33,7 +33,7 @@ setup:
 
 start:
 	@echo "Starting all services..."
-	docker-compose up -d
+	docker compose up -d
 	@echo "Waiting for services to be ready..."
 	@sleep 10
 	@echo "Services started!"
@@ -42,19 +42,19 @@ start:
 	@echo "API Docs: http://localhost:8000/docs"
 
 stop:
-	docker-compose down
+	docker compose down
 
 restart:
-	docker-compose restart
+	docker compose restart
 
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 
 logs-backend:
-	docker-compose logs -f backend
+	docker compose logs -f backend
 
 logs-ollama:
-	docker-compose logs -f ollama
+	docker compose logs -f ollama
 
 pull-model:
 	@echo "Pulling llama3.1:8b model..."
@@ -85,7 +85,7 @@ test:
 	@bash scripts/test_api.sh
 
 clean:
-	docker-compose down -v
+	docker compose down -v
 
 clean-all: clean
 	@echo "Removing all data..."
