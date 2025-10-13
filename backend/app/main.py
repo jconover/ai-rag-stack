@@ -132,7 +132,7 @@ async def list_models():
         model_infos = [
             ModelInfo(
                 name=m.get('name', ''),
-                size=m.get('size', ''),
+                size=str(m.get('size', '')),
                 modified=m.get('modified_at', '')
             )
             for m in models
