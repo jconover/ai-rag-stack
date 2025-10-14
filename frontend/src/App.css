@@ -63,6 +63,23 @@
   color: #fff;
 }
 
+.clear-button {
+  background-color: #21262d;
+  color: #58a6ff;
+  border: 1px solid #30363d;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-button:hover {
+  background-color: #30363d;
+  border-color: #58a6ff;
+}
+
 .chat-container {
   flex: 1;
   display: flex;

@@ -75,6 +75,7 @@ Recommended models for your hardware:
 - **llama3.1:70b** - Most capable, slower (40GB+ VRAM, requires quantization)
 - **mistral:7b** - Fast and efficient (7GB VRAM)
 - **deepseek-coder:33b** - Excellent for code (20GB+ VRAM)
+- **deepseek-coder:6.7b** - Smaller deepseek model
 
 ```bash
 # Pull additional models

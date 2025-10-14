@@ -73,6 +73,12 @@ function App() {
     }
   };
 
+  const clearChat = () => {
+    setMessages([]);
+    setSessionId(generateSessionId());
+    setInput('');
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
@@ -136,6 +142,15 @@ function App() {
             <span className={`health-badge ${health.status}`}>
               {health.status}
             </span>
+          )}
+          {messages.length > 0 && (
+            <button
+              onClick={clearChat}
+              className="clear-button"
+              title="Start new chat"
+            >
+              New Chat
+            </button>
           )}
         </div>
       </header>
