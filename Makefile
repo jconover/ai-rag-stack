@@ -1,11 +1,12 @@
-.PHONY: help verify setup start stop restart logs clean pull-model ingest health
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
 	@echo "========================================"
 	@echo "verify         - Verify system requirements (Docker, GPU, etc.)"
 	@echo "setup          - Initial setup (copy .env, create directories)"
-	@echo "start          - Start all services"
+	@echo "start          - Start all services (uses Docker Hub images)"
+	@echo "start-dev      - Start services in dev mode (builds locally)"
 	@echo "stop           - Stop all services"
 	@echo "restart        - Restart all services"
 	@echo "logs           - View logs from all services"
@@ -20,6 +21,7 @@ help:
 	@echo "health         - Check service health"
 	@echo "stats          - Show vector database statistics"
 	@echo "test           - Test API endpoints"
+	@echo "publish        - Build and push images to Docker Hub"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -33,7 +35,8 @@ setup:
 	@echo "Setup complete! Edit .env if needed, then run 'make start'"
 
 start:
-	@echo "Starting all services..."
+	@echo "Starting all services (using Docker Hub images)..."
+	docker compose pull
 	docker compose up -d
 	@echo "Waiting for services to be ready..."
 	@sleep 10
@@ -42,8 +45,19 @@ start:
 	@echo "Backend API: http://localhost:8000"
 	@echo "API Docs: http://localhost:8000/docs"
 
+start-dev:
+	@echo "Starting all services in DEV mode (building locally)..."
+	docker compose -f docker-compose.dev.yml up -d --build
+	@echo "Waiting for services to be ready..."
+	@sleep 10
+	@echo "Services started in DEV mode!"
+	@echo "Frontend: http://localhost:3000"
+	@echo "Backend API: http://localhost:8000"
+	@echo "API Docs: http://localhost:8000/docs"
+
 stop:
 	docker compose down
+	docker compose -f docker-compose.dev.yml down
 
 restart:
 	docker compose restart
@@ -90,8 +104,13 @@ stats:
 test:
 	@bash scripts/test_api.sh
 
+publish:
+	@echo "Building and pushing images to Docker Hub..."
+	@bash scripts/push_to_dockerhub.sh
+
 clean:
 	docker compose down -v
+	docker compose -f docker-compose.dev.yml down -v
 
 clean-all: clean
 	@echo "Removing all data..."

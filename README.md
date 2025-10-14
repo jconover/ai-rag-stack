@@ -7,11 +7,12 @@ A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Au
 - **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, CodeLlama, etc.)
 - **RAG Pipeline**: Vector search using Qdrant for accurate, context-aware responses
 - **DevOps Documentation**: Pre-configured to ingest K8s, Terraform, Docker, Ansible, AWS, and more
-- **Web UI**: Clean, responsive chat interface
+- **Web UI**: Clean, responsive chat interface with Dark and Catppuccin Mocha themes
 - **REST API**: FastAPI backend for integration with other tools
 - **GPU Acceleration**: Optimized for NVIDIA GPUs (tested on RTX 3090 24GB)
 - **Document Ingestion**: Automated pipeline to scrape and index documentation
 - **Conversation Memory**: Redis-backed chat history
+- **Docker Hub Ready**: Pre-built images available for instant deployment
 
 ## System Requirements
 
@@ -42,21 +43,38 @@ A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Au
 
 ## Quick Start
 
+### Option 1: Using Pre-built Docker Hub Images (Fastest)
+
 ```bash
-# Navigate to project directory
+# Clone the repository
 git clone https://github.com/jconover/ai-rag-stack.git
 cd ai-rag-stack
 
-# Verify your system is ready (checks Docker, GPU, disk space, etc.)
-bash scripts/verify_setup.sh
+# Pull and start all services (uses pre-built images from Docker Hub)
+docker compose pull
+docker compose up -d
 
-# Initial setup
-make setup
+# Wait for Ollama to be healthy, then pull your preferred model
+docker exec ollama ollama pull llama3.1:8b
 
-# Start all services (Ollama, Qdrant, Redis, API, UI)
-make start
+# Ingest DevOps documentation
+python scripts/ingest_docs.py
 
-# Pull your preferred model (run this after Ollama starts)
+# Access the UI
+open http://localhost:3000
+```
+
+### Option 2: Build from Source (For Development)
+
+```bash
+# Clone the repository
+git clone https://github.com/jconover/ai-rag-stack.git
+cd ai-rag-stack
+
+# Use the dev compose file with local builds
+docker compose -f docker-compose.dev.yml up -d --build
+
+# Pull your preferred model
 docker exec ollama ollama pull llama3.1:8b
 
 # Ingest DevOps documentation
@@ -183,15 +201,20 @@ Qdrant configuration in `backend/app/vectorstore.py`:
 
 ## Development
 
+### Local Development Setup
+
 ```bash
-# Backend development
+# Use the dev compose file for local development with hot-reload
+docker compose -f docker-compose.dev.yml up -d --build
+
+# Backend development (without Docker)
 cd backend
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Frontend development
+# Frontend development (without Docker)
 cd frontend
 npm install
 npm run dev
@@ -200,6 +223,31 @@ npm run dev
 curl -fsSL https://ollama.com/install.sh | sh
 ollama serve
 ```
+
+## Publishing to Docker Hub
+
+If you're forking this project and want to publish your own images:
+
+```bash
+# Login to Docker Hub
+docker login
+
+# Build, tag, and push images (replace version as needed)
+./scripts/push_to_dockerhub.sh v1.0.0
+
+# Or just push latest
+./scripts/push_to_dockerhub.sh
+```
+
+The script will:
+1. Build both backend and frontend images
+2. Tag them with your version and 'latest'
+3. Push to Docker Hub
+4. Display the image URLs
+
+**Docker Hub Images:**
+- Backend: [jconover/ai-rag-backend](https://hub.docker.com/r/jconover/ai-rag-backend)
+- Frontend: [jconover/ai-rag-frontend](https://hub.docker.com/r/jconover/ai-rag-frontend)
 
 ## Troubleshooting
 

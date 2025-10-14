@@ -62,13 +62,16 @@ services:
       timeout: 10s
       retries: 3
 
-  # Backend API - FastAPI with RAG pipeline
+  # Backend API - FastAPI with RAG pipeline (DEV MODE with volume mounts)
   backend:
-    image: jconover/ai-rag-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: rag-backend
     ports:
       - "8000:8000"
     volumes:
+      - ./backend:/app
       - ./data:/data
       - ./scripts:/scripts
     environment:
@@ -93,9 +96,11 @@ services:
       timeout: 10s
       retries: 3
 
-  # Frontend - React web UI
+  # Frontend - React web UI (DEV MODE with volume mounts)
   frontend:
-    image: jconover/ai-rag-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: rag-frontend
     ports:
       - "3000:80"
