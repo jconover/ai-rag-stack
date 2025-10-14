@@ -15,6 +15,10 @@ function App() {
   const [sessionId, setSessionId] = useState('');
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    // Load theme from localStorage or default to 'dark'
+    return localStorage.getItem('theme') || 'dark';
+  });
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -34,6 +38,11 @@ function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    // Save theme to localStorage when it changes
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   const generateSessionId = () => {
     return 'session_' + Math.random().toString(36).substr(2, 9);
@@ -79,6 +88,10 @@ function App() {
     setInput('');
   };
 
+  const toggleTheme = () => {
+    setTheme(prevTheme => prevTheme === 'dark' ? 'catppuccin' : 'dark');
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
@@ -118,7 +131,7 @@ function App() {
   };
 
   return (
-    <div className="App">
+    <div className="App" data-theme={theme}>
       <header className="App-header">
         <h1>DevOps AI Assistant</h1>
         <div className="header-info">
@@ -143,6 +156,13 @@ function App() {
               {health.status}
             </span>
           )}
+          <button
+            onClick={toggleTheme}
+            className="theme-toggle"
+            title={`Switch to ${theme === 'dark' ? 'Catppuccin' : 'Dark'} theme`}
+          >
+            {theme === 'dark' ? '🎨 Catppuccin' : '🌙 Dark'}
+          </button>
           {messages.length > 0 && (
             <button
               onClick={clearChat}
