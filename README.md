@@ -1,12 +1,12 @@
 # DevOps AI Assistant - Local LLM with RAG
 
-A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Augmented Generation (RAG) for DevOps documentation. Query Kubernetes, Terraform, Docker, Ansible, and other DevOps tools using natural language.
+A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Augmented Generation (RAG) for DevOps and programming documentation. Query Kubernetes, Terraform, Docker, Python, Go, Bash, and other tools using natural language.
 
 ## Features
 
 - **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, Qwen2.5-Coder, etc.)
 - **RAG Pipeline**: Vector search using Qdrant for accurate, context-aware responses
-- **DevOps Documentation**: Pre-configured to ingest K8s, Terraform, Docker, Ansible, AWS, and more
+- **Comprehensive Documentation**: DevOps (K8s, Terraform, Docker, Ansible) + Programming (Python, Go, Bash, Zsh)
 - **Web UI**: Clean, responsive chat interface with Dark and Catppuccin Mocha themes
 - **AI Coding Assistant**: Aider integration with Qwen2.5-Coder for AI pair programming
 - **REST API**: FastAPI backend for integration with other tools
@@ -114,14 +114,25 @@ make setup-aider
 
 The ingestion pipeline automatically indexes:
 
+### DevOps & Infrastructure
 - **Kubernetes**: Official K8s docs (concepts, reference, tutorials)
 - **Terraform**: HashiCorp Terraform docs
 - **Docker**: Docker Engine, Compose, Swarm docs
 - **Ansible**: Ansible documentation and best practices
+- **Prometheus**: Monitoring and observability
+
+### Programming Languages
+- **Python**: Official Python documentation (stdlib, language reference)
+- **Go**: Official Go documentation and tutorials
+- **Bash**: GNU Bash manual and scripting guides
+- **Zsh**: Zsh manual, completions, and advanced guides
+
+### Cloud Platforms
 - **AWS**: AWS service documentation (EC2, S3, Lambda, ECS, etc.)
 - **Azure**: Azure DevOps, AKS, Container Instances
 - **GitLab CI/CD**: CI/CD pipeline documentation
-- **Prometheus/Grafana**: Monitoring and observability
+
+### Custom Documentation
 - **Custom Docs**: Add your own markdown/text files to `data/custom/`
 
 ## Project Structure
