@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b setup-aider
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b setup-aider update-docs
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -18,6 +18,7 @@ help:
 	@echo "list-models    - List available Ollama models"
 	@echo "ingest         - Download and ingest DevOps documentation"
 	@echo "download-docs  - Download documentation only"
+	@echo "update-docs    - Update existing documentation to latest versions"
 	@echo "health         - Check service health"
 	@echo "stats          - Show vector database statistics"
 	@echo "test           - Test API endpoints"
@@ -97,6 +98,14 @@ ingest: download-docs
 download-docs:
 	@echo "Downloading DevOps documentation..."
 	bash scripts/download_docs.sh data/docs
+
+update-docs:
+	@echo "Updating existing documentation..."
+	@bash scripts/update_docs.sh data/docs && \
+		echo "" && \
+		echo "📚 Updates detected! Re-ingesting documentation..." && \
+		$(MAKE) ingest || \
+		echo "✓ No updates found. Documentation is current."
 
 health:
 	@curl -s http://localhost:8000/api/health | python3 -m json.tool

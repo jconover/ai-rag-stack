@@ -155,6 +155,53 @@ The ingestion pipeline automatically indexes **30+ comprehensive documentation s
 ### Custom Documentation
 - **Custom Docs**: Add your own markdown/text files to `data/custom/`
 
+## Keeping Documentation Updated
+
+Your documentation stays fresh with automated updates:
+
+### Manual Updates
+
+Update all documentation to latest versions:
+
+```bash
+# Update existing documentation repositories
+make update-docs
+
+# This will:
+# 1. Pull latest changes from all git repositories
+# 2. Show which repos were updated
+# 3. Automatically re-ingest if updates found
+```
+
+### Automated Updates (n8n)
+
+Set up automated weekly or nightly updates:
+
+**Weekly Updates (Recommended):**
+- Runs every Sunday at 2 AM
+- Full notifications via Slack/Email
+- Best for most use cases
+
+**Nightly Updates:**
+- Runs every day at 2 AM
+- Silent mode (only notifies on updates)
+- Best for bleeding-edge environments
+
+**Setup:**
+```bash
+# 1. Add n8n to docker-compose.yml (see n8n-workflows/README.md)
+docker compose up -d n8n
+
+# 2. Import workflow at http://localhost:5678
+#    - weekly-doc-update.json (recommended)
+#    - daily-doc-update.json (high frequency)
+
+# 3. Configure Slack/Email notifications
+# 4. Activate workflow
+```
+
+See [n8n-workflows/README.md](n8n-workflows/README.md) for complete setup instructions.
+
 ## Project Structure
 
 ```
@@ -175,10 +222,15 @@ ai-rag-stack/
 │   └── Dockerfile
 ├── scripts/
 │   ├── ingest_docs.py     # Documentation ingestion
-│   └── download_docs.sh   # Download documentation
+│   ├── download_docs.sh   # Download documentation
+│   └── update_docs.sh     # Update existing docs
 ├── data/
 │   ├── docs/              # Downloaded documentation
 │   └── custom/            # Your custom docs
+├── n8n-workflows/         # Automation workflows
+│   ├── README.md          # Setup instructions
+│   ├── weekly-doc-update.json
+│   └── daily-doc-update.json
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -378,9 +430,15 @@ Automate DevOps workflows:
 - **Slack Bot**: Auto-answer questions in Slack channels
 - **Incident Response**: Auto-query runbooks during alerts
 - **CI/CD Helper**: Comment on failed pipelines with solutions
-- **Documentation Updates**: Auto-sync docs nightly
+- **Documentation Updates**: Auto-sync docs weekly or nightly with notifications
 
-**See:** [MCP_N8N_INTEGRATION.md](MCP_N8N_INTEGRATION.md) for detailed implementation guides, examples, and workflows.
+**Pre-built workflows available in `n8n-workflows/`:**
+- `weekly-doc-update.json` - Weekly updates with full notifications (recommended)
+- `daily-doc-update.json` - Nightly updates with silent mode
+
+**See:**
+- [MCP_N8N_INTEGRATION.md](MCP_N8N_INTEGRATION.md) - Integration guides and examples
+- [n8n-workflows/README.md](n8n-workflows/README.md) - Setup and usage instructions
 
 ## Troubleshooting
 

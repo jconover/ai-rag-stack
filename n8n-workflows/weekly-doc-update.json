@@ -1,0 +1,245 @@
+{
+  "name": "Weekly Documentation Update",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * 0"
+            }
+          ]
+        }
+      },
+      "name": "Every Sunday at 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "node-1"
+    },
+    {
+      "parameters": {
+        "command": "cd /home/justin/Code/ai-rag-stack && make update-docs"
+      },
+      "name": "Update Documentation",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ],
+      "id": "node-2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.exitCode}}",
+              "operation": "equals",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "name": "Check if Updates Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "id": "node-3"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse the update output\nconst output = $input.item.json.stdout;\nconst lines = output.split('\\n');\n\n// Extract updated repos\nconst updatedRepos = [];\nlet inUpdatedSection = false;\n\nfor (const line of lines) {\n  if (line.includes('Updated repositories:')) {\n    inUpdatedSection = true;\n    continue;\n  }\n  if (inUpdatedSection && line.trim().startsWith('•')) {\n    updatedRepos.push(line.trim().substring(1).trim());\n  }\n  if (line.includes('Total size:')) {\n    break;\n  }\n}\n\n// Extract counts\nconst updatedMatch = output.match(/Repositories updated: (\\d+)/);\nconst updatedCount = updatedMatch ? updatedMatch[1] : '0';\n\nreturn {\n  json: {\n    updatedCount: updatedCount,\n    updatedRepos: updatedRepos,\n    timestamp: new Date().toISOString(),\n    message: `📚 Documentation Update Complete!\\n\\n✓ ${updatedCount} repositories updated:\\n${updatedRepos.map(r => `  • ${r}`).join('\\n')}\\n\\nRe-ingestion completed successfully.`\n  }\n};"
+      },
+      "name": "Format Success Message",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        850,
+        200
+      ],
+      "id": "node-4"
+    },
+    {
+      "parameters": {
+        "functionCode": "return {\n  json: {\n    message: `✓ Documentation Update Check Complete\\n\\nNo updates found. All documentation is current.\\n\\nNext check: Next Sunday at 2 AM`,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "name": "Format No Updates Message",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        850,
+        400
+      ],
+      "id": "node-5"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "options": {},
+        "bodyParametersJson": "={\n  \"text\": \"{{$json.message}}\",\n  \"username\": \"AI RAG Documentation Bot\",\n  \"icon_emoji\": \":books:\"\n}"
+      },
+      "name": "Send Slack Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1050,
+        300
+      ],
+      "id": "node-6"
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@yourdomain.com",
+        "toEmail": "your-email@example.com",
+        "subject": "=AI RAG Stack - Documentation Update Report",
+        "text": "={{$json.message}}",
+        "options": {}
+      },
+      "name": "Send Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        450
+      ],
+      "id": "node-7",
+      "credentials": {
+        "smtp": {
+          "id": "1",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log the update event\nconst fs = require('fs');\nconst logFile = '/home/justin/Code/ai-rag-stack/data/update-log.json';\n\nlet logs = [];\ntry {\n  const content = fs.readFileSync(logFile, 'utf8');\n  logs = JSON.parse(content);\n} catch (e) {\n  // File doesn't exist or is invalid, start fresh\n}\n\nlogs.push({\n  timestamp: $json.timestamp,\n  updatedCount: $json.updatedCount || 0,\n  updatedRepos: $json.updatedRepos || [],\n  success: true\n});\n\n// Keep only last 50 entries\nif (logs.length > 50) {\n  logs = logs.slice(-50);\n}\n\nfs.writeFileSync(logFile, JSON.stringify(logs, null, 2));\n\nreturn { json: $json };"
+      },
+      "name": "Log Update Event",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ],
+      "id": "node-8"
+    }
+  ],
+  "connections": {
+    "Every Sunday at 2 AM": {
+      "main": [
+        [
+          {
+            "node": "Update Documentation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Documentation": {
+      "main": [
+        [
+          {
+            "node": "Check if Updates Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Updates Found": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format No Updates Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format No Updates Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Notification": {
+      "main": [
+        [
+          {
+            "node": "Log Update Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Notification": {
+      "main": [
+        [
+          {
+            "node": "Log Update Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "automation",
+      "id": "1"
+    },
+    {
+      "name": "documentation",
+      "id": "2"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-17T00:00:00.000Z",
+  "versionId": "1"
+}

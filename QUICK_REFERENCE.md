@@ -14,7 +14,8 @@ make health         # Check service health
 
 ### Documentation
 ```bash
-make download-docs  # Download all documentation
+make download-docs  # Download all documentation (initial)
+make update-docs    # Update existing docs to latest versions
 make ingest         # Ingest docs into vector DB
 make stats          # Show vector database stats
 ```

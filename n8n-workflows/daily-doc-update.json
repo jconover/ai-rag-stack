@@ -1,0 +1,151 @@
+{
+  "name": "Daily Documentation Update (Nightly)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every Day at 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "node-1"
+    },
+    {
+      "parameters": {
+        "command": "cd /home/justin/Code/ai-rag-stack && make update-docs"
+      },
+      "name": "Update Documentation",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ],
+      "id": "node-2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.exitCode}}",
+              "operation": "equals",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "name": "Check if Updates Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "id": "node-3"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Only send notification if updates were found (nightly mode = quiet unless needed)\nconst output = $input.item.json.stdout;\nconst updatedMatch = output.match(/Repositories updated: (\\d+)/);\nconst updatedCount = parseInt(updatedMatch ? updatedMatch[1] : '0');\n\nif (updatedCount > 0) {\n  return {\n    json: {\n      message: `🌙 Nightly Documentation Update\\n\\n✓ ${updatedCount} repositories updated and re-ingested.\\n\\nTimestamp: ${new Date().toLocaleString()}`,\n      shouldNotify: true\n    }\n  };\n}\n\nreturn { json: { shouldNotify: false } };"
+      },
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        850,
+        200
+      ],
+      "id": "node-4"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "options": {},
+        "bodyParametersJson": "={\n  \"text\": \"{{$json.message}}\",\n  \"username\": \"AI RAG Documentation Bot\",\n  \"icon_emoji\": \":crescent_moon:\"\n}"
+      },
+      "name": "Send Slack Notification (Only if Updated)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1050,
+        200
+      ],
+      "id": "node-5"
+    }
+  ],
+  "connections": {
+    "Every Day at 2 AM": {
+      "main": [
+        [
+          {
+            "node": "Update Documentation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Documentation": {
+      "main": [
+        [
+          {
+            "node": "Check if Updates Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Updates Found": {
+      "main": [
+        [
+          {
+            "node": "Format Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification (Only if Updated)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "automation",
+      "id": "1"
+    },
+    {
+      "name": "nightly",
+      "id": "3"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-17T00:00:00.000Z",
+  "versionId": "1"
+}
