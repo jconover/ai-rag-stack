@@ -4,10 +4,11 @@ A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Au
 
 ## Features
 
-- **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, CodeLlama, etc.)
+- **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, Qwen2.5-Coder, etc.)
 - **RAG Pipeline**: Vector search using Qdrant for accurate, context-aware responses
 - **DevOps Documentation**: Pre-configured to ingest K8s, Terraform, Docker, Ansible, AWS, and more
 - **Web UI**: Clean, responsive chat interface with Dark and Catppuccin Mocha themes
+- **AI Coding Assistant**: Aider integration with Qwen2.5-Coder for AI pair programming
 - **REST API**: FastAPI backend for integration with other tools
 - **GPU Acceleration**: Optimized for NVIDIA GPUs (tested on RTX 3090 24GB)
 - **Document Ingestion**: Automated pipeline to scrape and index documentation
@@ -86,19 +87,27 @@ open http://localhost:3000
 
 ## Available Models
 
+### For Chat & Documentation
+
 Recommended models for your hardware:
 
 - **llama3.1:8b** - Best general purpose (8GB VRAM)
-- **codellama:13b** - Better for code generation (13GB VRAM)
-- **llama3.1:70b** - Most capable, slower (40GB+ VRAM, requires quantization)
 - **mistral:7b** - Fast and efficient (7GB VRAM)
-- **deepseek-coder:33b** - Excellent for code (20GB+ VRAM)
-- **deepseek-coder:6.7b** - Smaller deepseek model
+- **deepseek-coder:6.7b** - Smaller coding model
 
 ```bash
 # Pull additional models
-docker exec ollama ollama pull codellama:13b
 docker exec ollama ollama pull mistral:7b
+```
+
+### For Coding Assistant (Aider)
+
+- **qwen2.5-coder:7b** - Fast coding assistant (~4.7GB VRAM) ⚡
+- **qwen2.5-coder:32b** - Powerful coding assistant (~19GB VRAM) 🚀
+
+```bash
+# Setup coding assistant (installs Aider + pulls models)
+make setup-aider
 ```
 
 ## Documentation Sources
@@ -248,6 +257,80 @@ The script will:
 **Docker Hub Images:**
 - Backend: [jconover/ai-rag-backend](https://hub.docker.com/r/jconover/ai-rag-backend)
 - Frontend: [jconover/ai-rag-frontend](https://hub.docker.com/r/jconover/ai-rag-frontend)
+
+## AI Coding Assistant (Aider)
+
+This project includes **Aider**, an AI pair programming tool that works with your local Ollama models.
+
+### Features
+
+- **Code Generation**: Write new features with AI assistance
+- **Refactoring**: Improve existing code with smart suggestions
+- **Bug Fixes**: Get help debugging and fixing issues
+- **Git Integration**: Auto-commits changes with descriptive messages
+- **Multi-file Editing**: Works across your entire codebase
+- **Local Models**: Uses Qwen2.5-Coder via Ollama (no API keys needed)
+
+### Setup
+
+```bash
+# One-time setup: Install Aider and pull models
+make setup-aider
+```
+
+This will:
+1. Install Aider CLI tool
+2. Pull `qwen2.5-coder:7b` (fast, 4.7GB)
+3. Pull `qwen2.5-coder:32b` (powerful, 19GB)
+
+### Usage
+
+```bash
+# Start Aider with 7B model (faster responses)
+make aider
+
+# Start Aider with 32B model (more capable)
+make aider-32b
+
+# Or run directly with custom options
+aider --model ollama/qwen2.5-coder:7b --edit-format diff
+```
+
+### Example Session
+
+```bash
+$ make aider
+Aider v0.59.0
+Model: qwen2.5-coder:7b with diff edit format
+Git repo: /home/user/ai-rag-stack
+
+> Add a new API endpoint to export chat history as JSON
+
+# Aider will:
+# 1. Analyze your codebase
+# 2. Edit the necessary files
+# 3. Auto-commit the changes
+# 4. Show you a diff of what changed
+```
+
+### Tips
+
+- **7B model**: Use for quick edits, bug fixes, and simple features
+- **32B model**: Use for complex refactoring, architecture changes, and new features
+- **Both run simultaneously**: Your RTX 3090 can handle both models in VRAM!
+- **Git integration**: Aider auto-commits, so you can easily review and rollback changes
+
+### Configuration
+
+Two config files are provided:
+- `.aider.conf.yml` - 7B model configuration
+- `.aider.32b.conf.yml` - 32B model configuration
+
+Customize them to adjust:
+- Max tokens
+- Edit format (diff, whole, or udiff)
+- Auto-commit behavior
+- Dark mode settings
 
 ## Troubleshooting
 

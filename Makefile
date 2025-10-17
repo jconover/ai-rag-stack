@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b setup-aider
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -22,6 +22,9 @@ help:
 	@echo "stats          - Show vector database statistics"
 	@echo "test           - Test API endpoints"
 	@echo "publish        - Build and push images to Docker Hub"
+	@echo "setup-aider    - Setup Aider coding assistant with Qwen2.5-Coder"
+	@echo "aider          - Start Aider with qwen2.5-coder:7b (fast)"
+	@echo "aider-32b      - Start Aider with qwen2.5-coder:32b (powerful)"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -107,6 +110,17 @@ test:
 publish:
 	@echo "Building and pushing images to Docker Hub..."
 	@bash scripts/push_to_dockerhub.sh
+
+setup-aider:
+	@bash scripts/setup_aider.sh
+
+aider:
+	@echo "Starting Aider with qwen2.5-coder:7b (fast)..."
+	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.conf.yml
+
+aider-32b:
+	@echo "Starting Aider with qwen2.5-coder:32b (powerful)..."
+	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.32b.conf.yml
 
 clean:
 	docker compose down -v
