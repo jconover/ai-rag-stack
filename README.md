@@ -6,10 +6,11 @@ A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Au
 
 - **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, Qwen2.5-Coder, etc.)
 - **RAG Pipeline**: Vector search using Qdrant for accurate, context-aware responses
-- **Comprehensive Documentation**: DevOps (K8s, Terraform, Docker, Ansible) + Programming (Python, Go, Bash, Zsh)
+- **30+ Documentation Sources**: Complete DevOps stack (K8s, Docker, Terraform, ELK, Grafana) + 6 programming languages + CI/CD tools
 - **Web UI**: Clean, responsive chat interface with Dark and Catppuccin Mocha themes
 - **AI Coding Assistant**: Aider integration with Qwen2.5-Coder for AI pair programming
 - **REST API**: FastAPI backend for integration with other tools
+- **Extensible**: MCP and n8n integration for workflow automation
 - **GPU Acceleration**: Optimized for NVIDIA GPUs (tested on RTX 3090 24GB)
 - **Document Ingestion**: Automated pipeline to scrape and index documentation
 - **Conversation Memory**: Redis-backed chat history
@@ -112,25 +113,44 @@ make setup-aider
 
 ## Documentation Sources
 
-The ingestion pipeline automatically indexes:
+The ingestion pipeline automatically indexes **30+ comprehensive documentation sources**:
 
 ### DevOps & Infrastructure
 - **Kubernetes**: Official K8s docs (concepts, reference, tutorials)
-- **Terraform**: HashiCorp Terraform docs
-- **Docker**: Docker Engine, Compose, Swarm docs
-- **Ansible**: Ansible documentation and best practices
-- **Prometheus**: Monitoring and observability
+- **Terraform**: HashiCorp Terraform configuration and providers
+- **Docker**: Docker Engine, Compose, Swarm documentation
+- **Ansible**: Playbooks, roles, modules, and best practices
+- **Helm**: Kubernetes package manager documentation
+
+### Monitoring & Observability
+- **Prometheus**: Metrics collection, queries, and alerting
+- **Grafana**: Dashboards, data sources, and visualization
+- **ELK Stack**: Elasticsearch, Logstash, Kibana (full stack)
 
 ### Programming Languages
-- **Python**: Official Python documentation (stdlib, language reference)
-- **Go**: Official Go documentation and tutorials
+- **Python**: Official stdlib and language reference
+- **Go**: Language spec, packages, and effective Go
+- **Rust**: Official docs + Rust by Example
+- **JavaScript/Node.js**: Node.js API + MDN JavaScript reference
 - **Bash**: GNU Bash manual and scripting guides
-- **Zsh**: Zsh manual, completions, and advanced guides
+- **Zsh**: Shell manual, completions, and hooks
+
+### CI/CD & GitOps
+- **Git**: Pro Git book + official documentation
+- **Jenkins**: Pipeline configuration and plugins
+- **GitHub Actions**: Workflows and automation
+- **ArgoCD**: GitOps continuous delivery
+- **GitLab CI/CD**: Pipeline configuration
 
 ### Cloud Platforms
-- **AWS**: AWS service documentation (EC2, S3, Lambda, ECS, etc.)
-- **Azure**: Azure DevOps, AKS, Container Instances
-- **GitLab CI/CD**: CI/CD pipeline documentation
+- **AWS**: EC2, S3, Lambda, ECS, VPC, IAM
+- **Azure**: AKS, DevOps, Container Instances
+- **GCP**: Google Cloud Platform services and APIs
+
+### Automation & Integration
+- **n8n**: Workflow automation and integration
+- **JSON Schema**: Configuration validation
+- **YAML**: Specification and best practices
 
 ### Custom Documentation
 - **Custom Docs**: Add your own markdown/text files to `data/custom/`
@@ -342,6 +362,25 @@ Customize them to adjust:
 - Edit format (diff, whole, or udiff)
 - Auto-commit behavior
 - Dark mode settings
+
+## MCP and n8n Integration
+
+This RAG stack can be extended with powerful automation and integration capabilities:
+
+### MCP (Model Context Protocol)
+Expose your RAG system to Claude Desktop and other AI tools:
+- **Tool Calling**: Let Claude search your documentation
+- **External Sources**: Integrate Jira, Confluence, Slack
+- **Custom Actions**: Execute kubectl, terraform commands safely
+
+### n8n Workflow Automation
+Automate DevOps workflows:
+- **Slack Bot**: Auto-answer questions in Slack channels
+- **Incident Response**: Auto-query runbooks during alerts
+- **CI/CD Helper**: Comment on failed pipelines with solutions
+- **Documentation Updates**: Auto-sync docs nightly
+
+**See:** [MCP_N8N_INTEGRATION.md](MCP_N8N_INTEGRATION.md) for detailed implementation guides, examples, and workflows.
 
 ## Troubleshooting
 
