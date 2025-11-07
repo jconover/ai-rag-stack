@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **DevOps AI Assistant** - a production-ready RAG (Retrieval-Augmented Generation) system that uses local LLMs via Ollama to answer questions about DevOps and programming documentation. The system includes 30+ documentation sources (Kubernetes, Terraform, Docker, Python, Go, Rust, etc.) indexed in a vector database.
+This is a **DevOps AI Assistant** - a production-ready RAG (Retrieval-Augmented Generation) system that uses local LLMs via Ollama to answer questions about DevOps and programming documentation. The system includes 30+ documentation sources (Kubernetes, Kubernetes AI/ML, Terraform, Docker, Python, Go, Rust, etc.) indexed in a vector database.
 
 **Tech Stack**: FastAPI (Python backend) + React (frontend) + Ollama (LLM) + Qdrant (vector DB) + Redis (conversation memory)
 
@@ -17,7 +17,7 @@ This is a **DevOps AI Assistant** - a production-ready RAG (Retrieval-Augmented 
 - Frontend: Fetch API with ReadableStream for progressive rendering
 
 ### 2. Prompt Templates
-- **15 pre-built templates** for common DevOps tasks (K8s, Terraform, Docker, etc.)
+- **16 pre-built templates** for common DevOps tasks (K8s, Kubernetes AI/ML, Terraform, Docker, etc.)
 - Categories: Kubernetes, Terraform, Docker, Ansible, Monitoring, CI/CD, Debugging, Security, Scripting, Operations
 - Backend: `templates.py` module with `/api/templates` endpoint
 - Frontend: Modal UI with searchable template cards
@@ -114,7 +114,7 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
   - `generate_response()` - Batch generation
   - `generate_response_stream()` - Streaming generation
 - `vectorstore.py` - Qdrant interface (`VectorStore` class)
-- `templates.py` - Prompt template definitions (15 templates)
+- `templates.py` - Prompt template definitions (16 templates)
 - `config.py` - Environment configuration
 - `models.py` - Pydantic request/response models
 

@@ -18,6 +18,26 @@ else
     echo "Kubernetes docs already exist, skipping..."
 fi
 
+# Kubernetes AI Documentation
+echo "Downloading Kubernetes AI docs..."
+if [ ! -d "$DOCS_DIR/kubernetes-ai" ]; then
+    git clone --depth 1 https://github.com/kubernetes-sigs/cluster-api.git "$DOCS_DIR/k8s-ai-src"
+    if [ -d "$DOCS_DIR/k8s-ai-src/docs" ]; then
+        mv "$DOCS_DIR/k8s-ai-src/docs" "$DOCS_DIR/kubernetes-ai"
+        rm -rf "$DOCS_DIR/k8s-ai-src"
+    fi
+    # Also get kubeflow documentation for ML/AI on Kubernetes
+    git clone --depth 1 https://github.com/kubeflow/website.git "$DOCS_DIR/kubeflow-tmp" || \
+        echo "Warning: Could not clone Kubeflow docs"
+    if [ -d "$DOCS_DIR/kubeflow-tmp/content" ]; then
+        mkdir -p "$DOCS_DIR/kubernetes-ai/kubeflow"
+        mv "$DOCS_DIR/kubeflow-tmp/content" "$DOCS_DIR/kubernetes-ai/kubeflow/docs"
+        rm -rf "$DOCS_DIR/kubeflow-tmp"
+    fi
+else
+    echo "Kubernetes AI docs already exist, skipping..."
+fi
+
 # Terraform Documentation
 echo "Downloading Terraform docs..."
 if [ ! -d "$DOCS_DIR/terraform" ]; then
@@ -301,6 +321,7 @@ echo "Downloaded documentation for:"
 echo ""
 echo "DEVOPS & INFRASTRUCTURE:"
 echo "  ✓ Kubernetes"
+echo "  ✓ Kubernetes AI (Cluster API, Kubeflow)"
 echo "  ✓ Terraform"
 echo "  ✓ Docker"
 echo "  ✓ Ansible"

@@ -16,6 +16,13 @@ PROMPT_TEMPLATES = [
         "prompt": "Create a Kubernetes deployment YAML for a web application with 3 replicas, resource limits, and a liveness probe."
     },
     {
+        "id": "k8s-ai-ml",
+        "category": "Kubernetes",
+        "title": "AI/ML on Kubernetes",
+        "description": "Deploy ML workloads with Kubeflow",
+        "prompt": "How do I deploy machine learning workloads on Kubernetes using Kubeflow? Include information about training, serving, and pipelines."
+    },
+    {
         "id": "terraform-vpc",
         "category": "Terraform",
         "title": "AWS VPC Setup",

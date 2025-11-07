@@ -120,6 +120,7 @@ class DocumentIngestionPipeline:
         # Documentation sources to ingest
         doc_sources = {
             "kubernetes": os.path.join(DOCS_DIR, "kubernetes"),
+            "kubernetes-ai": os.path.join(DOCS_DIR, "kubernetes-ai"),
             "terraform": os.path.join(DOCS_DIR, "terraform"),
             "docker": os.path.join(DOCS_DIR, "docker"),
             "ansible": os.path.join(DOCS_DIR, "ansible"),
