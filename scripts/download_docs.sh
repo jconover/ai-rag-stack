@@ -21,6 +21,8 @@ fi
 # Kubernetes AI Documentation
 echo "Downloading Kubernetes AI docs..."
 if [ ! -d "$DOCS_DIR/kubernetes-ai" ]; then
+    # Clean up temp directories if they exist from a previous failed run
+    rm -rf "$DOCS_DIR/k8s-ai-src" "$DOCS_DIR/kubeflow-tmp"
     git clone --depth 1 https://github.com/kubernetes-sigs/cluster-api.git "$DOCS_DIR/k8s-ai-src"
     if [ -d "$DOCS_DIR/k8s-ai-src/docs" ]; then
         mv "$DOCS_DIR/k8s-ai-src/docs" "$DOCS_DIR/kubernetes-ai"
@@ -73,6 +75,8 @@ fi
 # Python Documentation
 echo "Downloading Python docs..."
 if [ ! -d "$DOCS_DIR/python" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/python-src"
     git clone --depth 1 https://github.com/python/cpython.git "$DOCS_DIR/python-src"
     # Extract just the Doc directory
     if [ -d "$DOCS_DIR/python-src/Doc" ]; then
@@ -86,6 +90,8 @@ fi
 # Go Documentation
 echo "Downloading Go docs..."
 if [ ! -d "$DOCS_DIR/go" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/go-src"
     git clone --depth 1 https://github.com/golang/go.git "$DOCS_DIR/go-src"
     # Extract just the doc directory
     if [ -d "$DOCS_DIR/go-src/doc" ]; then
@@ -113,6 +119,8 @@ fi
 # Zsh Documentation
 echo "Downloading Zsh docs..."
 if [ ! -d "$DOCS_DIR/zsh" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/zsh-src"
     mkdir -p "$DOCS_DIR/zsh"
     # Clone Zsh source for documentation
     git clone --depth 1 https://github.com/zsh-users/zsh.git "$DOCS_DIR/zsh-src"
@@ -130,6 +138,8 @@ fi
 # JavaScript/Node.js Documentation
 echo "Downloading JavaScript/Node.js docs..."
 if [ ! -d "$DOCS_DIR/nodejs" ]; then
+    # Clean up temp directories if they exist from a previous failed run
+    rm -rf "$DOCS_DIR/nodejs-src" "$DOCS_DIR/mdn-js-tmp"
     git clone --depth 1 https://github.com/nodejs/node.git "$DOCS_DIR/nodejs-src"
     if [ -d "$DOCS_DIR/nodejs-src/doc" ]; then
         mv "$DOCS_DIR/nodejs-src/doc" "$DOCS_DIR/nodejs"
@@ -149,6 +159,8 @@ fi
 # Rust Documentation
 echo "Downloading Rust docs..."
 if [ ! -d "$DOCS_DIR/rust" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/rust-src"
     git clone --depth 1 https://github.com/rust-lang/rust.git "$DOCS_DIR/rust-src"
     if [ -d "$DOCS_DIR/rust-src/src/doc" ]; then
         mv "$DOCS_DIR/rust-src/src/doc" "$DOCS_DIR/rust"
@@ -164,6 +176,8 @@ fi
 # Grafana Documentation
 echo "Downloading Grafana docs..."
 if [ ! -d "$DOCS_DIR/grafana" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/grafana-src"
     git clone --depth 1 https://github.com/grafana/grafana.git "$DOCS_DIR/grafana-src"
     if [ -d "$DOCS_DIR/grafana-src/docs" ]; then
         mv "$DOCS_DIR/grafana-src/docs" "$DOCS_DIR/grafana"
@@ -177,6 +191,8 @@ fi
 echo "Downloading ELK Stack docs..."
 # Elasticsearch
 if [ ! -d "$DOCS_DIR/elasticsearch" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/es-src"
     git clone --depth 1 https://github.com/elastic/elasticsearch.git "$DOCS_DIR/es-src"
     if [ -d "$DOCS_DIR/es-src/docs" ]; then
         mv "$DOCS_DIR/es-src/docs" "$DOCS_DIR/elasticsearch"
@@ -188,6 +204,8 @@ fi
 
 # Logstash
 if [ ! -d "$DOCS_DIR/logstash" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/logstash-src"
     git clone --depth 1 https://github.com/elastic/logstash.git "$DOCS_DIR/logstash-src"
     if [ -d "$DOCS_DIR/logstash-src/docs" ]; then
         mv "$DOCS_DIR/logstash-src/docs" "$DOCS_DIR/logstash"
@@ -199,6 +217,8 @@ fi
 
 # Kibana
 if [ ! -d "$DOCS_DIR/kibana" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/kibana-src"
     git clone --depth 1 https://github.com/elastic/kibana.git "$DOCS_DIR/kibana-src"
     if [ -d "$DOCS_DIR/kibana-src/docs" ]; then
         mv "$DOCS_DIR/kibana-src/docs" "$DOCS_DIR/kibana"
@@ -211,6 +231,8 @@ fi
 # Git Documentation
 echo "Downloading Git docs..."
 if [ ! -d "$DOCS_DIR/git" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/git-src"
     mkdir -p "$DOCS_DIR/git"
     # Clone the official Git book
     git clone --depth 1 https://github.com/progit/progit2.git "$DOCS_DIR/git/progit2" || \
@@ -228,6 +250,8 @@ fi
 # Jenkins Documentation
 echo "Downloading Jenkins docs..."
 if [ ! -d "$DOCS_DIR/jenkins" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/jenkins-src"
     git clone --depth 1 https://github.com/jenkins-infra/jenkins.io.git "$DOCS_DIR/jenkins-src"
     if [ -d "$DOCS_DIR/jenkins-src/content" ]; then
         mv "$DOCS_DIR/jenkins-src/content" "$DOCS_DIR/jenkins"
@@ -240,6 +264,8 @@ fi
 # GitHub Actions Documentation
 echo "Downloading GitHub Actions docs..."
 if [ ! -d "$DOCS_DIR/github-actions" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/gh-docs-tmp"
     mkdir -p "$DOCS_DIR/github-actions"
     git clone --depth 1 https://github.com/github/docs.git "$DOCS_DIR/gh-docs-tmp"
     if [ -d "$DOCS_DIR/gh-docs-tmp/content/actions" ]; then
@@ -253,6 +279,8 @@ fi
 # ArgoCD Documentation
 echo "Downloading ArgoCD docs..."
 if [ ! -d "$DOCS_DIR/argocd" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/argocd-src"
     git clone --depth 1 https://github.com/argoproj/argo-cd.git "$DOCS_DIR/argocd-src"
     if [ -d "$DOCS_DIR/argocd-src/docs" ]; then
         mv "$DOCS_DIR/argocd-src/docs" "$DOCS_DIR/argocd"
@@ -265,6 +293,8 @@ fi
 # Helm Documentation
 echo "Downloading Helm docs..."
 if [ ! -d "$DOCS_DIR/helm" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/helm-src"
     git clone --depth 1 https://github.com/helm/helm.git "$DOCS_DIR/helm-src"
     if [ -d "$DOCS_DIR/helm-src/docs" ]; then
         mv "$DOCS_DIR/helm-src/docs" "$DOCS_DIR/helm"
@@ -277,6 +307,8 @@ fi
 # GCP Documentation
 echo "Downloading GCP docs..."
 if [ ! -d "$DOCS_DIR/gcp" ]; then
+    # Clean up temp directory if it exists from a previous failed run
+    rm -rf "$DOCS_DIR/gcp-tmp"
     mkdir -p "$DOCS_DIR/gcp"
     # GCP Python client docs
     git clone --depth 1 https://github.com/googleapis/google-cloud-python.git "$DOCS_DIR/gcp-tmp"
