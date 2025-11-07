@@ -1,7 +1,6 @@
 """RAG (Retrieval-Augmented Generation) pipeline"""
 from typing import List, Optional, Dict, Any
 import ollama
-from langchain.schema import Document
 
 from app.config import settings
 from app.vectorstore import vector_store
@@ -12,7 +11,7 @@ class RAGPipeline:
         self.ollama_host = settings.ollama_host
         self.default_model = settings.ollama_default_model
     
-    def _format_context(self, documents: List[Document]) -> str:
+    def _format_context(self, documents: List) -> str:
         """Format retrieved documents into context string"""
         if not documents:
             return ""
@@ -135,6 +134,82 @@ Provide a helpful, accurate, and concise response."""
             return True
         except:
             return False
+
+    async def generate_response_stream(
+        self,
+        query: str,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        use_rag: bool = True,
+    ):
+        """Generate streaming response using RAG pipeline"""
+
+        model = model or self.default_model
+        context_docs = []
+        context_str = ""
+
+        # Retrieve relevant context if RAG is enabled
+        if use_rag:
+            try:
+                context_docs = vector_store.search(query, top_k=settings.top_k_results)
+                context_str = self._format_context(context_docs)
+            except Exception as e:
+                print(f"Error retrieving context: {e}")
+
+        # Build prompt
+        prompt = self._build_prompt(query, context_str)
+
+        # Format sources
+        sources = []
+        if context_docs:
+            for doc in context_docs:
+                sources.append({
+                    'source': doc.metadata.get('source', 'Unknown'),
+                    'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    'content_preview': doc.page_content[:200] + '...' if len(doc.page_content) > 200 else doc.page_content
+                })
+
+        # Yield metadata first
+        yield {
+            'type': 'metadata',
+            'model': model,
+            'context_used': bool(context_docs),
+            'sources': sources if sources else None,
+        }
+
+        # Generate streaming response using Ollama
+        try:
+            stream = ollama.chat(
+                model=model,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ],
+                options={
+                    'temperature': temperature,
+                    'num_predict': max_tokens,
+                },
+                stream=True
+            )
+
+            for chunk in stream:
+                if chunk.get('message', {}).get('content'):
+                    yield {
+                        'type': 'content',
+                        'content': chunk['message']['content']
+                    }
+
+            # Signal completion
+            yield {'type': 'done'}
+
+        except Exception as e:
+            yield {
+                'type': 'error',
+                'error': str(e)
+            }
 
 
 # Singleton instance
