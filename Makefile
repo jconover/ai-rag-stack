@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b setup-aider update-docs
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -24,8 +24,11 @@ help:
 	@echo "test           - Test API endpoints"
 	@echo "publish        - Build and push images to Docker Hub"
 	@echo "setup-aider    - Setup Aider coding assistant with Qwen2.5-Coder"
+	@echo "setup-aider-deepseek - Setup Aider with DeepSeek Coder models"
 	@echo "aider          - Start Aider with qwen2.5-coder:7b (fast)"
 	@echo "aider-32b      - Start Aider with qwen2.5-coder:32b (powerful)"
+	@echo "aider-deepseek - Start Aider with deepseek-coder:6.7b"
+	@echo "aider-deepseek-33b - Start Aider with deepseek-coder:33b (most powerful)"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -130,6 +133,38 @@ aider:
 aider-32b:
 	@echo "Starting Aider with qwen2.5-coder:32b (powerful)..."
 	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.32b.conf.yml
+
+setup-aider-deepseek:
+	@echo "Setting up Aider with DeepSeek Coder models..."
+	@echo "Installing Aider (if not already installed)..."
+	@pip install --upgrade aider-chat || echo "Aider already installed or pip not available"
+	@echo ""
+	@echo "Pulling DeepSeek Coder models..."
+	@echo "1/3: Pulling deepseek-coder:1.3b (lightweight, ~800MB)..."
+	@docker exec ollama ollama pull deepseek-coder:1.3b
+	@echo ""
+	@echo "2/3: Pulling deepseek-coder:6.7b (recommended, ~3.8GB)..."
+	@docker exec ollama ollama pull deepseek-coder:6.7b
+	@echo ""
+	@echo "3/3: Pulling deepseek-coder:33b (powerful, ~18GB)..."
+	@docker exec ollama ollama pull deepseek-coder:33b
+	@echo ""
+	@echo "✓ DeepSeek Coder setup complete!"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make aider-deepseek       - Start with deepseek-coder:6.7b"
+	@echo "  make aider-deepseek-33b   - Start with deepseek-coder:33b (most powerful)"
+	@echo "  Or run directly:"
+	@echo "  aider --model ollama/deepseek-coder:6.7b"
+	@echo "  aider --model ollama/deepseek-coder:33b"
+
+aider-deepseek:
+	@echo "Starting Aider with deepseek-coder:6.7b..."
+	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.deepseek.conf.yml
+
+aider-deepseek-33b:
+	@echo "Starting Aider with deepseek-coder:33b (most powerful)..."
+	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.deepseek-33b.conf.yml
 
 clean:
 	docker compose down -v
