@@ -13,6 +13,7 @@ ollama>=0.1.6
 qdrant-client>=1.7.0
 
 # Embeddings
+langchain-huggingface>=0.1.0
 sentence-transformers>=2.3.0
 torch>=2.1.0
 
