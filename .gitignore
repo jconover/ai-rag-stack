@@ -64,3 +64,6 @@ models/
 .aider.chat.history*.md
 .aider.input.history
 .aider.tags.cache.v3/
+
+# Claude Code (keep agents, ignore personal settings)
+.claude/settings.local.json

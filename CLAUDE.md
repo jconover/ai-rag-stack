@@ -153,6 +153,32 @@ docker compose restart backend  # Restart after code changes
 - Singletons for shared resources: `rag_pipeline`, `vector_store`
 - Configuration centralized in `config.py` via environment variables
 
+## Claude Code Agents
+
+This repo includes 12 specialized AI/ML subagents in `.claude/agents/` for comprehensive code reviews:
+
+| Agent | Focus |
+|-------|-------|
+| `ai-engineer` | AI system design, production deployment |
+| `llm-architect` | LLM architecture, RAG optimization |
+| `ml-engineer` | ML lifecycle, model serving |
+| `mlops-engineer` | ML infrastructure, CI/CD |
+| `prompt-engineer` | Prompt design, optimization |
+| `data-engineer` | Data pipelines, ETL |
+| `data-scientist` | Statistical analysis, modeling |
+| `database-optimizer` | Query optimization, indexing |
+| `nlp-engineer` | NLP pipelines, embeddings |
+| `data-analyst` | Analytics, visualization |
+| `postgres-pro` | Database administration |
+| `machine-learning-engineer` | Inference, edge deployment |
+
+**Usage:** Run parallel expert reviews with:
+```
+Launch 12 agents to review this project from different perspectives
+```
+
+*Credit: Agents from [awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) (categories/05-data-ai)*
+
 ## Known Limitations
 
 - Embedding model runs on CPU (change to CUDA in vectorstore.py for GPU)
