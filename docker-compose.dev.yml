@@ -76,6 +76,7 @@ services:
       - REDIS_PORT=6379
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=info
+      - RERANKER_ENABLED=true
     depends_on:
       ollama:
         condition: service_healthy

@@ -27,16 +27,21 @@ import os
 METRICS_LOG_PATH = os.getenv("RETRIEVAL_METRICS_LOG", "/data/logs/retrieval_metrics.jsonl")
 ENABLE_PROMETHEUS = os.getenv("ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
 
-# Ensure log directory exists
-Path(METRICS_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-
 # Setup file handler for metrics logging
 metrics_logger = logging.getLogger("retrieval_metrics")
 metrics_logger.setLevel(logging.INFO)
 metrics_logger.propagate = False  # Prevent duplicate logging
 
-# File handler for JSON lines output
-file_handler = logging.FileHandler(METRICS_LOG_PATH, mode='a')
+# Try to set up file handler, fall back to /tmp if permissions fail
+try:
+    Path(METRICS_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode='a')
+except (PermissionError, OSError):
+    # Fall back to /tmp if /data/logs is not writable
+    METRICS_LOG_PATH = "/tmp/retrieval_metrics.jsonl"
+    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode='a')
+    logging.warning(f"Could not write to original path, using fallback: {METRICS_LOG_PATH}")
+
 file_handler.setFormatter(logging.Formatter('%(message)s'))  # Raw JSON output
 metrics_logger.addHandler(file_handler)
 

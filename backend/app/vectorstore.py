@@ -341,7 +341,6 @@ class VectorStore:
             query_filter=query_filter,
             search_params=search_params,
             with_payload=True,
-            with_vectors=False,  # Don't return vectors to reduce payload
         )
 
         return self._process_search_results(results, min_score, top_k)

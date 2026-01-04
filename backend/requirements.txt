@@ -28,7 +28,8 @@ langchain-experimental>=0.0.50
 # -----------------------------------------------------------------------------
 # Vector Store
 # -----------------------------------------------------------------------------
-qdrant-client>=1.7.0
+# Pinned to be compatible with server v1.12.4 (minor version diff must be <= 1)
+qdrant-client>=1.11.0,<1.14.0
 
 # -----------------------------------------------------------------------------
 # Embeddings and Reranking
