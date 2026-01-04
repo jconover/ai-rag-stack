@@ -1,0 +1,73 @@
+# =============================================================================
+# GPU-Accelerated Dockerfile for DevOps AI Assistant
+# =============================================================================
+# This Dockerfile includes CUDA support for GPU-accelerated embeddings
+# and reranking. Use this when deploying on NVIDIA GPU-equipped machines.
+#
+# Build:
+#   docker build -f Dockerfile.gpu -t devops-ai-assistant:gpu .
+#
+# Run:
+#   docker run --gpus all -p 8000:8000 devops-ai-assistant:gpu
+#
+# Prerequisites:
+#   - NVIDIA Docker runtime installed
+#   - NVIDIA GPU with CUDA support
+# =============================================================================
+
+# Use NVIDIA CUDA base image with Python
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV EMBEDDING_DEVICE=cuda
+ENV CUDA_VISIBLE_DEVICES=0
+
+WORKDIR /app
+
+# Install Python 3.11 and system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# Copy requirements
+COPY requirements.txt requirements-gpu.txt ./
+
+# Install PyTorch with CUDA 12.1 support
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121
+
+# Install remaining dependencies (skips torch since already installed)
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Download spaCy English model for semantic chunking
+RUN python -m spacy download en_core_web_sm
+
+# Download NLTK data for text processing
+RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True)"
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# Run the application
+# Using 2 workers for GPU workloads (GPU memory is shared)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

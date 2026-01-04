@@ -18,6 +18,7 @@ from app.models import (
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
 from app.templates import get_templates, get_template_by_id, get_categories
+from app.metrics import get_metrics_summary, ENABLE_PROMETHEUS
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -82,21 +83,36 @@ async def root():
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with component status including reranker."""
     ollama_connected = rag_pipeline.is_ollama_connected()
     qdrant_connected = vector_store.is_connected()
-    
+
     try:
         redis_client.ping()
         redis_connected = True
     except:
         redis_connected = False
-    
+
+    # Get reranker status
+    reranker_status = rag_pipeline.get_reranker_status()
+
+    # Core services must be connected for healthy status
+    core_healthy = all([ollama_connected, qdrant_connected, redis_connected])
+
+    # If reranker is enabled but not loaded, status is degraded
+    reranker_healthy = (
+        not reranker_status.get('enabled') or
+        reranker_status.get('loaded', False)
+    )
+
     return HealthResponse(
-        status="healthy" if all([ollama_connected, qdrant_connected, redis_connected]) else "degraded",
+        status="healthy" if (core_healthy and reranker_healthy) else "degraded",
         ollama_connected=ollama_connected,
         qdrant_connected=qdrant_connected,
-        redis_connected=redis_connected
+        redis_connected=redis_connected,
+        reranker_enabled=reranker_status.get('enabled', False),
+        reranker_loaded=reranker_status.get('loaded', False),
+        reranker_model=reranker_status.get('model_name'),
     )
 
 
@@ -128,7 +144,8 @@ async def chat(request: ChatRequest):
             model=result['model'],
             context_used=result['context_used'],
             sources=result['sources'],
-            session_id=session_id
+            session_id=session_id,
+            retrieval_metrics=result.get('retrieval_metrics'),
         )
 
     except Exception as e:
@@ -321,6 +338,49 @@ async def upload_documents(
             }
 
     return result
+
+
+@app.get("/api/metrics/retrieval")
+async def get_retrieval_metrics(last_n: int = 100):
+    """Get summary of recent retrieval metrics.
+
+    Returns aggregated statistics from the last N retrieval operations,
+    including score distributions, latency percentiles, and query success rates.
+
+    Args:
+        last_n: Number of recent entries to analyze (default 100)
+
+    Returns:
+        Summary statistics for retrieval quality monitoring
+    """
+    if not settings.enable_retrieval_metrics:
+        raise HTTPException(
+            status_code=503,
+            detail="Retrieval metrics are disabled. Set ENABLE_RETRIEVAL_METRICS=true"
+        )
+
+    try:
+        summary = get_metrics_summary(last_n=last_n)
+        return {
+            "status": "ok",
+            "metrics_enabled": True,
+            "prometheus_enabled": ENABLE_PROMETHEUS,
+            "summary": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Optional Prometheus metrics endpoint
+if ENABLE_PROMETHEUS:
+    try:
+        from prometheus_client import make_asgi_app
+
+        # Mount Prometheus metrics endpoint
+        metrics_app = make_asgi_app()
+        app.mount("/metrics", metrics_app)
+    except ImportError:
+        pass  # prometheus_client not installed
 
 
 if __name__ == "__main__":

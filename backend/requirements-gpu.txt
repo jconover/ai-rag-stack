@@ -1,0 +1,65 @@
+# =============================================================================
+# DevOps AI Assistant - GPU Requirements (CUDA)
+# =============================================================================
+# This file contains GPU-accelerated dependencies for faster embeddings
+# and reranking. Use this when running on NVIDIA GPU-equipped machines.
+#
+# Usage:
+#   pip install -r requirements-gpu.txt
+#
+# Prerequisites:
+#   - NVIDIA GPU with CUDA support
+#   - CUDA Toolkit 11.8 or 12.x installed
+#   - cuDNN installed
+#
+# Set environment variable to enable GPU:
+#   export EMBEDDING_DEVICE=cuda
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Include all base requirements
+# -----------------------------------------------------------------------------
+-r requirements.txt
+
+# -----------------------------------------------------------------------------
+# PyTorch with CUDA support
+# -----------------------------------------------------------------------------
+# Uninstall CPU torch first, then install CUDA version:
+#   pip uninstall torch -y
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# Or for CUDA 11.8:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+# Note: The base requirements.txt includes CPU torch. When using this file,
+# the CUDA version should be installed separately BEFORE running pip install.
+
+# -----------------------------------------------------------------------------
+# GPU-Accelerated Libraries (Optional Enhancements)
+# -----------------------------------------------------------------------------
+# FAISS GPU support (alternative vector search - not required for Qdrant)
+# faiss-gpu>=1.7.4
+
+# cuML for GPU-accelerated ML operations (optional)
+# cuml>=24.02
+
+# -----------------------------------------------------------------------------
+# Memory Optimization for GPU
+# -----------------------------------------------------------------------------
+# Efficient attention mechanisms for large models
+# xformers>=0.0.23
+
+# Bits and bytes for quantization (reduces GPU memory usage)
+# bitsandbytes>=0.41.0
+
+# -----------------------------------------------------------------------------
+# Recommended GPU Environment Variables
+# -----------------------------------------------------------------------------
+# Set these in your .env or docker-compose.yml:
+#
+# EMBEDDING_DEVICE=cuda
+# CUDA_VISIBLE_DEVICES=0  # Specify which GPU to use
+# PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512  # Memory management
+#
+# For multi-GPU setups:
+# CUDA_VISIBLE_DEVICES=0,1  # Use GPUs 0 and 1

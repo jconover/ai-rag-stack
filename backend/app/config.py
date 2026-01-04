@@ -26,6 +26,21 @@ class Settings(BaseSettings):
 
     # Embeddings - set to 'cuda' for GPU acceleration (5-10x faster)
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
+
+    # Reranker - Cross-encoder for improved retrieval quality
+    reranker_enabled: bool = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
+    reranker_model: str = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker_device: str = os.getenv("RERANKER_DEVICE", "cpu")
+    reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", 5))  # Final results after reranking
+    retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", 20))  # Initial retrieval before reranking
+
+    # Score thresholds for filtering low-quality results
+    min_similarity_score: float = float(os.getenv("MIN_SIMILARITY_SCORE", 0.3))
+    min_rerank_score: float = float(os.getenv("MIN_RERANK_SCORE", 0.01))
+
+    # Metrics and logging
+    enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
+    log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"
     
     # API
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
