@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", 200))
     top_k_results: int = int(os.getenv("TOP_K_RESULTS", 5))
     context_window: int = int(os.getenv("CONTEXT_WINDOW", 4096))
+
+    # Embeddings - set to 'cuda' for GPU acceleration (5-10x faster)
+    embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
     
     # API
     api_host: str = os.getenv("API_HOST", "0.0.0.0")

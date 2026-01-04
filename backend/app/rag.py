@@ -29,32 +29,34 @@ class RAGPipeline:
         
         return "\n---\n".join(context_parts)
     
-    def _build_prompt(self, query: str, context: str) -> str:
-        """Build prompt with context for the LLM"""
-        if context:
-            prompt = f"""You are an expert DevOps engineer assistant. Use the provided documentation context to answer the user's question accurately and concisely.
-
-Context from documentation:
-{context}
-
-User Question: {query}
+    def _get_system_prompt(self) -> str:
+        """Get the system prompt defining the assistant's role and behavior."""
+        return """You are an expert DevOps engineer assistant. Your role is to help users with DevOps, infrastructure, and programming questions.
 
 Instructions:
-- Answer based primarily on the provided context
+- Answer based primarily on the provided context when available
 - If the context doesn't fully answer the question, use your general knowledge but mention this
-- Provide code examples when relevant
+- Provide code examples when relevant, using proper markdown code blocks
 - Be concise but thorough
 - If you're unsure, say so
+- When citing sources, reference them as [Source N]"""
 
-Answer:"""
+    def _get_user_prompt(self, query: str, context: str) -> str:
+        """Build the user prompt with context and query."""
+        if context:
+            return f"""Context from documentation:
+{context}
+
+Question: {query}"""
         else:
-            prompt = f"""You are an expert DevOps engineer assistant. Answer the following question:
+            return query
 
-{query}
-
-Provide a helpful, accurate, and concise response."""
-        
-        return prompt
+    def _build_messages(self, query: str, context: str) -> List[Dict[str, str]]:
+        """Build messages list with proper system/user role separation."""
+        return [
+            {'role': 'system', 'content': self._get_system_prompt()},
+            {'role': 'user', 'content': self._get_user_prompt(query, context)}
+        ]
     
     async def generate_response(
         self,
@@ -78,19 +80,14 @@ Provide a helpful, accurate, and concise response."""
             except Exception as e:
                 print(f"Error retrieving context: {e}")
         
-        # Build prompt
-        prompt = self._build_prompt(query, context_str)
-        
+        # Build messages with proper system/user separation
+        messages = self._build_messages(query, context_str)
+
         # Generate response using Ollama
         try:
             response = ollama.chat(
                 model=model,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ],
+                messages=messages,
                 options={
                     'temperature': temperature,
                     'num_predict': max_tokens,
@@ -139,7 +136,7 @@ Provide a helpful, accurate, and concise response."""
     def _run_ollama_stream(
         self,
         model: str,
-        prompt: str,
+        messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
         queue: asyncio.Queue,
@@ -152,12 +149,7 @@ Provide a helpful, accurate, and concise response."""
         try:
             stream = ollama.chat(
                 model=model,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ],
+                messages=messages,
                 options={
                     'temperature': temperature,
                     'num_predict': max_tokens,
@@ -208,8 +200,8 @@ Provide a helpful, accurate, and concise response."""
             except Exception as e:
                 print(f"Error retrieving context: {e}")
 
-        # Build prompt
-        prompt = self._build_prompt(query, context_str)
+        # Build messages with proper system/user separation
+        messages = self._build_messages(query, context_str)
 
         # Format sources
         sources = []
@@ -239,7 +231,7 @@ Provide a helpful, accurate, and concise response."""
             None,  # Use default executor (ThreadPoolExecutor)
             self._run_ollama_stream,
             model,
-            prompt,
+            messages,
             temperature,
             max_tokens,
             queue,

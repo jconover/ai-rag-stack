@@ -34,13 +34,14 @@ COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "devops_docs")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 4))
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # Set to 'cuda' for GPU
 
 
 class DocumentIngestionPipeline:
     def __init__(self):
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}  # Change to 'cuda' if you want GPU embeddings
+            model_kwargs={'device': EMBEDDING_DEVICE}
         )
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,

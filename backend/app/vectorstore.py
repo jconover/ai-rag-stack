@@ -20,7 +20,7 @@ class VectorStore:
         )
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}
+            model_kwargs={'device': settings.embedding_device}
         )
         # Warmup the embedding model to eliminate first-query cold-start latency
         self.embeddings.embed_query("warmup")

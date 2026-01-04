@@ -58,12 +58,15 @@ def get_conversation_history(session_id: str, limit: int = 5) -> list:
 
 
 def save_message(session_id: str, role: str, content: str):
-    """Save message to conversation history"""
+    """Save message to conversation history using pipeline for efficiency."""
     try:
         history_key = f"chat:{session_id}"
         message = json.dumps({"role": role, "content": content})
-        redis_client.rpush(history_key, message)
-        redis_client.expire(history_key, 86400)  # 24 hour expiry
+        # Use pipeline to batch rpush and expire into single round-trip
+        pipe = redis_client.pipeline()
+        pipe.rpush(history_key, message)
+        pipe.expire(history_key, 86400)  # 24 hour expiry
+        pipe.execute()
     except Exception as e:
         print(f"Error saving message: {e}")
 

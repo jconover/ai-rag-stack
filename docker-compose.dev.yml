@@ -1,7 +1,7 @@
 services:
   # Ollama - Local LLM inference with GPU support
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.5.4
     container_name: ollama
     ports:
       - "11434:11434"
@@ -23,7 +23,7 @@ services:
 
   # Qdrant - Vector database for RAG
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.4
     container_name: qdrant
     ports:
       - "6333:6333"
@@ -42,7 +42,7 @@ services:
 
   # Redis - Conversation memory and caching
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: redis
     ports:
       - "6379:6379"
