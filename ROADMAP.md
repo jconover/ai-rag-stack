@@ -315,18 +315,20 @@ hnsw_config=HnswConfigDiff(
 - [x] Redis pipeline batching
 - [x] Configurable CORS origins
 
-### Phase 2: RAG Quality
+### Phase 2: RAG Quality ✅
 
 - [x] System/user message separation
-- [ ] Add cross-encoder reranking
-- [ ] Implement semantic chunking
-- [ ] Add retrieval score logging
+- [x] Add cross-encoder reranking (reranker.py with ms-marco-MiniLM-L-6-v2)
+- [x] Implement semantic chunking (chunkers.py with markdown-aware splitting)
+- [x] Add retrieval score logging (metrics.py with JSON + Prometheus)
+- [x] Vector store optimizations (HNSW tuning, INT8 quantization)
+- [x] Benchmark framework (scripts/benchmark_rag.py)
 
-### Phase 3: Observability (Week 3-4)
+### Phase 3: Observability
 
-- [ ] Prometheus metrics endpoint
+- [x] Prometheus metrics endpoint (optional via ENABLE_PROMETHEUS_METRICS)
+- [x] Query analytics logging (retrieval_metrics.jsonl)
 - [ ] Feedback collection endpoint
-- [ ] Query analytics logging
 - [ ] Grafana dashboard
 
 ### Phase 4: Advanced Features (Month 2)
