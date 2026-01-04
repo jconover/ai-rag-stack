@@ -12,13 +12,7 @@ services:
       - OLLAMA_GPU_LAYERS=999
       - OLLAMA_NUM_THREAD=16
       - OLLAMA_MAX_LOADED_MODELS=2
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    runtime: nvidia
     restart: unless-stopped
     healthcheck:
       test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/11434' || exit 1

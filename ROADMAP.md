@@ -6,9 +6,9 @@ This document contains recommendations from 12 specialized AI agents reviewing t
 
 | Issue                         | Details                                                                                | File                    | Status |
 | ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------- | ------ |
-| **Streaming bug**             | `generate_response_stream()` is async but iterates sync generator, blocking event loop | `rag.py:138-212`        | TODO   |
-| **Remove `--reload` in prod** | Dev flag in production Dockerfile                                                      | `backend/Dockerfile:28` | TODO   |
-| **CORS wildcard**             | `allow_origins=["*"]` is insecure for production                                       | `main.py:32`            | TODO   |
+| **Streaming bug**             | `generate_response_stream()` is async but iterates sync generator, blocking event loop | `rag.py:138-212`        | DONE   |
+| **Remove `--reload` in prod** | Dev flag in production Dockerfile                                                      | `backend/Dockerfile:28` | DONE   |
+| **CORS wildcard**             | `allow_origins=["*"]` is insecure for production                                       | `main.py:32`            | DONE   |
 
 ---
 
@@ -307,11 +307,11 @@ hnsw_config=HnswConfigDiff(
 
 ### Phase 1: Stability & Performance (Week 1)
 
-- [ ] Fix streaming async bug
-- [ ] Remove `--reload`, pin versions, add resource limits
-- [ ] Add embedding warmup + Ollama keep-alive
+- [x] Fix streaming async bug
+- [x] Remove `--reload`, add resource limits, add Uvicorn workers
+- [x] Add embedding warmup + Ollama keep-alive
 - [ ] Enable GPU embeddings
-- [ ] Add Uvicorn workers
+- [ ] Pin container versions
 
 ### Phase 2: RAG Quality (Week 2-3)
 

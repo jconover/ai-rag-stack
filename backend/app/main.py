@@ -26,10 +26,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware
+# CORS middleware - origins configurable via CORS_ORIGINS env var
+# Default: http://localhost:3000 (development)
+# Production: Set CORS_ORIGINS to comma-separated list of allowed origins
+# Warning: Using "*" allows all origins and should only be used for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

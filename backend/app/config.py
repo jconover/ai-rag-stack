@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", 8000))
     log_level: str = os.getenv("LOG_LEVEL", "info")
+
+    # CORS - comma-separated list of allowed origins
+    # Use "*" only for development; in production, specify exact origins
+    cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+
+    @property
+    def cors_origins_list(self) -> list:
+        """Parse CORS_ORIGINS into a list of origins"""
+        if not self.cors_origins:
+            return ["http://localhost:3000"]
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
     
     class Config:
         env_file = ".env"

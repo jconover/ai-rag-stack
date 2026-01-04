@@ -1,4 +1,5 @@
 """RAG (Retrieval-Augmented Generation) pipeline"""
+import asyncio
 from typing import List, Optional, Dict, Any
 import ollama
 
@@ -135,6 +136,52 @@ Provide a helpful, accurate, and concise response."""
         except:
             return False
 
+    def _run_ollama_stream(
+        self,
+        model: str,
+        prompt: str,
+        temperature: float,
+        max_tokens: int,
+        queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        """Run synchronous Ollama streaming in a thread and put results in async queue.
+
+        This method runs in a separate thread to avoid blocking the event loop.
+        """
+        try:
+            stream = ollama.chat(
+                model=model,
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ],
+                options={
+                    'temperature': temperature,
+                    'num_predict': max_tokens,
+                },
+                stream=True
+            )
+
+            for chunk in stream:
+                if chunk.get('message', {}).get('content'):
+                    # Thread-safe way to put item in async queue
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait,
+                        {'type': 'content', 'content': chunk['message']['content']}
+                    )
+
+            # Signal completion
+            loop.call_soon_threadsafe(queue.put_nowait, {'type': 'done'})
+
+        except Exception as e:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {'type': 'error', 'error': str(e)}
+            )
+
     async def generate_response_stream(
         self,
         query: str,
@@ -143,7 +190,11 @@ Provide a helpful, accurate, and concise response."""
         max_tokens: int = 2048,
         use_rag: bool = True,
     ):
-        """Generate streaming response using RAG pipeline"""
+        """Generate streaming response using RAG pipeline.
+
+        This async generator properly yields control back to the event loop
+        by running the synchronous Ollama streaming in a thread pool.
+        """
 
         model = model or self.default_model
         context_docs = []
@@ -178,38 +229,40 @@ Provide a helpful, accurate, and concise response."""
             'sources': sources if sources else None,
         }
 
-        # Generate streaming response using Ollama
+        # Generate streaming response using Ollama in a thread pool
+        # This prevents blocking the event loop
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        # Run the synchronous Ollama streaming in a thread pool
+        thread_task = loop.run_in_executor(
+            None,  # Use default executor (ThreadPoolExecutor)
+            self._run_ollama_stream,
+            model,
+            prompt,
+            temperature,
+            max_tokens,
+            queue,
+            loop,
+        )
+
+        # Consume chunks from the queue as they arrive
         try:
-            stream = ollama.chat(
-                model=model,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ],
-                options={
-                    'temperature': temperature,
-                    'num_predict': max_tokens,
-                },
-                stream=True
-            )
+            while True:
+                # Wait for next chunk from the thread, yielding control to event loop
+                chunk = await queue.get()
 
-            for chunk in stream:
-                if chunk.get('message', {}).get('content'):
-                    yield {
-                        'type': 'content',
-                        'content': chunk['message']['content']
-                    }
-
-            # Signal completion
-            yield {'type': 'done'}
-
-        except Exception as e:
-            yield {
-                'type': 'error',
-                'error': str(e)
-            }
+                if chunk['type'] == 'done':
+                    yield chunk
+                    break
+                elif chunk['type'] == 'error':
+                    yield chunk
+                    break
+                else:
+                    yield chunk
+        finally:
+            # Ensure the thread task completes
+            await thread_task
 
 
 # Singleton instance

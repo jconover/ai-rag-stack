@@ -22,6 +22,8 @@ class VectorStore:
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             model_kwargs={'device': 'cpu'}
         )
+        # Warmup the embedding model to eliminate first-query cold-start latency
+        self.embeddings.embed_query("warmup")
         self.collection_name = settings.qdrant_collection_name
         self._ensure_collection()
     
