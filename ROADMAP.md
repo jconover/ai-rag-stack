@@ -305,17 +305,19 @@ hnsw_config=HnswConfigDiff(
 
 ## Prioritized Roadmap
 
-### Phase 1: Stability & Performance (Week 1)
+### Phase 1: Stability & Performance ✅
 
 - [x] Fix streaming async bug
 - [x] Remove `--reload`, add resource limits, add Uvicorn workers
 - [x] Add embedding warmup + Ollama keep-alive
-- [ ] Enable GPU embeddings
-- [ ] Pin container versions
+- [x] Configurable GPU embeddings (EMBEDDING_DEVICE env var)
+- [x] Pin container versions (ollama:0.5.4, qdrant:v1.12.4, redis:7.4-alpine)
+- [x] Redis pipeline batching
+- [x] Configurable CORS origins
 
-### Phase 2: RAG Quality (Week 2-3)
+### Phase 2: RAG Quality
 
-- [ ] System/user message separation
+- [x] System/user message separation
 - [ ] Add cross-encoder reranking
 - [ ] Implement semantic chunking
 - [ ] Add retrieval score logging
