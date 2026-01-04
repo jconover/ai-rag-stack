@@ -323,11 +323,13 @@ hnsw_config=HnswConfigDiff(
 - [x] Add retrieval score logging (metrics.py with JSON + Prometheus)
 - [x] Vector store optimizations (HNSW tuning, INT8 quantization)
 - [x] Benchmark framework (scripts/benchmark_rag.py)
+- [x] Reranker tested and verified working (rerank scores in API response)
+- [x] Qdrant client compatibility fix (pinned to 1.11-1.13.x for server v1.12.4)
 
 ### Phase 3: Observability
 
 - [x] Prometheus metrics endpoint (optional via ENABLE_PROMETHEUS_METRICS)
-- [x] Query analytics logging (retrieval_metrics.jsonl)
+- [x] Query analytics logging (retrieval_metrics.jsonl with /tmp fallback)
 - [ ] Feedback collection endpoint
 - [ ] Grafana dashboard
 
@@ -433,4 +435,5 @@ Post-ingestion checks:
 ---
 
 _Document generated: 2025-01-04_
+_Last updated: 2026-01-04_
 _Based on reviews from 12 specialized AI agents_
