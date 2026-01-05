@@ -185,7 +185,36 @@ documents for vague queries, improving semantic matching against document chunks
 - Vague queries: ~2.2s HyDE generation + retrieval
 - Specific queries: HyDE skipped (instant, pattern-matched)
 
-#### 5. Upgrade Embedding Model
+#### 5. Web Search Fallback (Tavily) ✅
+
+**Impact:** Unlimited topic coverage | **Effort:** Medium | **Status:** DONE
+
+When local vector search returns low-confidence results, the system falls back to
+Tavily web search to find relevant documentation from trusted sources.
+
+**Files:**
+- `backend/app/web_search.py` - TavilySearcher class with async/sync support
+- `backend/app/config.py` - Web search configuration settings
+- `backend/app/rag.py` - Integration into RAG pipeline
+
+**Features:**
+- Score-based triggering (configurable threshold, default 0.4)
+- Domain whitelist for trusted doc sources (AWS, K8s, Docker, Terraform)
+- Results merged into LLM context with source attribution
+- Metrics tracking (web_search_used, web_search_time_ms in response)
+
+**Configuration:**
+- `WEB_SEARCH_ENABLED=true` - Enable web search fallback
+- `TAVILY_API_KEY=tvly-xxx` - Tavily API key (free tier: 1,000/month)
+- `WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4` - Trigger when avg score below this
+- `WEB_SEARCH_MAX_RESULTS=5` - Number of web results to fetch
+- `WEB_SEARCH_INCLUDE_DOMAINS=docs.aws.amazon.com,kubernetes.io` - Trusted domains
+
+**Cost:**
+- Free tier: 1,000 searches/month
+- Pay-as-you-go: $0.008/search
+
+#### 6. Upgrade Embedding Model
 
 **Impact:** +10-15% retrieval quality | **Effort:** Low
 
@@ -367,6 +396,7 @@ hnsw_config=HnswConfigDiff(
 
 - [x] Hybrid search (BM25 + vector) with RRF fusion - 15-80ms retrieval on 128k docs
 - [x] HyDE query expansion for vague queries (~2.2s generation, smart skip patterns)
+- [x] Web search fallback (Tavily) for queries with low local retrieval scores
 - [ ] PostgreSQL for analytics/metadata
 - [ ] Incremental ingestion with change detection
 - [ ] A/B testing framework

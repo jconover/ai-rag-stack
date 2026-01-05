@@ -56,10 +56,12 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
 
 ### RAG Pipeline Flow
 1. User query → Backend `/api/chat` or `/api/chat/stream`
-2. Query embedded via `sentence-transformers/all-MiniLM-L6-v2` (384 dims)
-3. Vector search in Qdrant → top 5 similar chunks
-4. Context + query → Ollama LLM → Response with source attribution
-5. Conversation saved to Redis (24h TTL)
+2. **HyDE expansion** (optional): Generate hypothetical document for vague queries
+3. **Hybrid search**: BM25 keyword + vector semantic search with RRF fusion
+4. **Reranking**: Cross-encoder reranks top 20 → top 5
+5. **Web search fallback**: If scores low, Tavily searches trusted doc sites
+6. Context + query → Ollama LLM → Response with source attribution
+7. Conversation saved to Redis (24h TTL)
 
 ### Key Files
 
@@ -67,8 +69,10 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
 |------|---------|
 | `backend/app/rag.py` | RAG pipeline: `generate_response()`, `generate_response_stream()` |
 | `backend/app/main.py` | FastAPI endpoints: `/api/chat`, `/api/chat/stream`, `/api/upload` |
-| `backend/app/vectorstore.py` | Qdrant interface (`VectorStore` class) |
-| `backend/app/templates.py` | 16 pre-built prompt templates |
+| `backend/app/vectorstore.py` | Qdrant interface, hybrid search (`VectorStore` class) |
+| `backend/app/reranker.py` | Cross-encoder reranking |
+| `backend/app/query_expansion.py` | HyDE query expansion |
+| `backend/app/web_search.py` | Tavily web search fallback |
 | `backend/app/config.py` | Environment configuration (reads `.env`) |
 | `scripts/ingest_docs.py` | Document ingestion pipeline |
 | `scripts/download_docs.sh` | Git clone documentation repos |
@@ -88,10 +92,21 @@ Markdown/Text → LangChain DirectoryLoader → RecursiveCharacterTextSplitter
 - **Collection**: `devops_docs` in Qdrant
 
 ### Environment Variables (`.env`)
+
+**Core Services:**
 - `OLLAMA_HOST` - Ollama endpoint (default: http://ollama:11434)
 - `QDRANT_HOST`, `QDRANT_PORT` - Vector DB
 - `REDIS_HOST`, `REDIS_PORT` - Conversation memory
 - `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K_RESULTS` - RAG tuning
+
+**Advanced RAG Features:**
+- `HYBRID_SEARCH_ENABLED=true` - Enable BM25 + vector hybrid search
+- `RERANKER_ENABLED=true` - Enable cross-encoder reranking
+- `HYDE_ENABLED=true` - Enable HyDE query expansion
+- `WEB_SEARCH_ENABLED=true` - Enable Tavily web search fallback
+- `TAVILY_API_KEY=tvly-xxx` - Tavily API key (free: 1,000/month)
+- `WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4` - Trigger web search below this score
+- `WEB_SEARCH_INCLUDE_DOMAINS=docs.aws.amazon.com,kubernetes.io` - Trusted domains
 
 ### Docker
 - **Production**: `docker-compose.yml` (Docker Hub images)

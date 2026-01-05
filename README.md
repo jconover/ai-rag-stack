@@ -5,11 +5,13 @@ A production-ready AI assistant powered by local LLMs (Ollama) with Retrieval-Au
 ## Features
 
 - **Local LLM Inference**: Ollama with support for multiple models (Llama 3.1, Mistral, Qwen2.5-Coder, etc.)
-- **RAG Pipeline**: Vector search using Qdrant for accurate, context-aware responses
+- **Advanced RAG Pipeline**: Multi-stage retrieval with hybrid search, reranking, and query expansion
+- **Web Search Fallback**: Automatic Tavily web search when local docs don't have the answer
 - **30+ Documentation Sources**: Complete DevOps stack (K8s, Docker, Terraform, ELK, Grafana) + 6 programming languages + CI/CD tools
 - **Web UI**: Clean, responsive chat interface with Dark and Catppuccin Mocha themes
 - **AI Coding Assistant**: Aider integration with Qwen2.5-Coder for AI pair programming
 - **REST API**: FastAPI backend for integration with other tools
+- **Observability**: Prometheus metrics, Grafana dashboards, retrieval analytics
 - **Extensible**: MCP and n8n integration for workflow automation
 - **GPU Acceleration**: Optimized for NVIDIA GPUs (tested on RTX 3090 24GB)
 - **Document Ingestion**: Automated pipeline to scrape and index documentation
@@ -154,6 +156,79 @@ The ingestion pipeline automatically indexes **30+ comprehensive documentation s
 
 ### Custom Documentation
 - **Custom Docs**: Add your own markdown/text files to `data/custom/`
+
+## Advanced RAG Features
+
+The RAG pipeline includes several advanced features for improved retrieval quality:
+
+### Hybrid Search (BM25 + Vector)
+
+Combines semantic vector search with keyword matching for better results on technical queries:
+
+```bash
+# Enable in docker-compose or .env
+HYBRID_SEARCH_ENABLED=true
+HYBRID_SEARCH_ALPHA=0.5  # Balance between vector (1.0) and keyword (0.0)
+```
+
+### HyDE Query Expansion
+
+Generates hypothetical documents for vague queries to improve semantic matching:
+
+```bash
+# Enable HyDE
+HYDE_ENABLED=true
+HYDE_MODEL=llama3.1:8b
+```
+
+Smart skip patterns avoid HyDE for specific queries (CLI commands, error messages, file paths).
+
+### Cross-Encoder Reranking
+
+Reranks initial results using a cross-encoder model for improved relevance:
+
+```bash
+RERANKER_ENABLED=true
+RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+```
+
+### Web Search Fallback (Tavily)
+
+When local documentation doesn't have the answer (low similarity scores), the system automatically falls back to web search:
+
+```bash
+# Enable web search fallback
+WEB_SEARCH_ENABLED=true
+TAVILY_API_KEY=tvly-your-api-key  # Get free key at https://tavily.com
+
+# Configuration
+WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4  # Trigger when avg score below this
+WEB_SEARCH_MAX_RESULTS=5
+WEB_SEARCH_INCLUDE_DOMAINS=docs.aws.amazon.com,kubernetes.io,docs.docker.com
+```
+
+**How it works:**
+1. Query runs through local vector search + reranking
+2. If average similarity score < threshold (default 0.4), web search triggers
+3. Tavily searches trusted documentation domains
+4. Results are merged into LLM context with source attribution
+
+**Cost:** Free tier includes 1,000 searches/month. Pay-as-you-go: $0.008/search.
+
+**Example response metrics:**
+```json
+{
+  "retrieval_metrics": {
+    "hybrid_search_used": true,
+    "hyde_used": true,
+    "reranker_used": true,
+    "web_search_used": true,
+    "web_search_reason": "low_avg_score_0.007",
+    "web_search_results": 5,
+    "web_search_time_ms": 450.32
+  }
+}
+```
 
 ## Keeping Documentation Updated
 
