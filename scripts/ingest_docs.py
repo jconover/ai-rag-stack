@@ -8,12 +8,20 @@ Features:
 - Code block protection (never split mid-block)
 - Content type detection (prose, code, list, table)
 - Metadata enrichment with heading paths
+- Incremental ingestion with change detection (only re-process changed files)
+
+Usage:
+    python ingest_docs.py              # Incremental ingestion (default)
+    python ingest_docs.py --full       # Force full re-ingestion
+    python ingest_docs.py --dry-run    # Show what would be processed
+    python ingest_docs.py --stats      # Show registry statistics
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Set, Tuple
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,6 +45,9 @@ from qdrant_client.models import (
     SparseIndexParams,
     PointStruct,
     SparseVector as QdrantSparseVector,
+    Filter,
+    FieldCondition,
+    MatchValue,
 )
 from tqdm import tqdm
 
@@ -47,6 +58,16 @@ from chunkers import (
     ContentType,
     create_chunker_from_env,
     get_semantic_chunker,
+)
+
+# Import ingestion registry for incremental updates
+from ingestion_registry import (
+    IngestionRegistry,
+    ChangeSet,
+    compute_file_hash,
+    compute_config_hash,
+    scan_directory_with_hashes,
+    print_stats,
 )
 
 # Configuration
@@ -109,6 +130,9 @@ class DocumentIngestionPipeline:
 
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
+        # Initialize ingestion registry for incremental updates
+        self.registry = IngestionRegistry()
+
         # Hybrid search setup
         self.use_hybrid = use_hybrid if use_hybrid is not None else HYBRID_SEARCH_ENABLED
         self.sparse_encoder = None
@@ -129,6 +153,78 @@ class DocumentIngestionPipeline:
                 print(f"WARNING: Failed to initialize sparse encoder: {e}")
                 print("  Falling back to dense-only vectors.")
                 self.use_hybrid = False
+
+    def _get_config_hash(self) -> str:
+        """Get hash of current chunking configuration."""
+        if self.use_semantic_chunking:
+            # Use chunker config for semantic mode
+            cfg = self.chunker.config
+            config_str = f"semantic:{cfg.prose_chunk_size}:{cfg.prose_chunk_overlap}"
+        else:
+            config_str = f"legacy:{CHUNK_SIZE}:{CHUNK_OVERLAP}"
+        return compute_config_hash(CHUNK_SIZE, CHUNK_OVERLAP, config_str)
+
+    def _config_changed(self) -> bool:
+        """Check if chunking configuration has changed since last ingestion."""
+        current_hash = self._get_config_hash()
+        stored_hash = self.registry.get_config_hash()
+
+        if stored_hash is None:
+            # First run, save config hash
+            self.registry.set_config_hash(current_hash)
+            return False
+
+        if current_hash != stored_hash:
+            print(f"WARNING: Chunking configuration has changed!")
+            print(f"  Previous: {stored_hash}")
+            print(f"  Current: {current_hash}")
+            return True
+
+        return False
+
+    def delete_chunks_for_file(self, source_path: str, collection_name: str = COLLECTION_NAME) -> int:
+        """
+        Delete all chunks for a specific source file from Qdrant.
+
+        Args:
+            source_path: Path to the source file
+            collection_name: Qdrant collection name
+
+        Returns:
+            Number of points deleted
+        """
+        try:
+            # Count points before deletion
+            count_result = self.client.count(
+                collection_name=collection_name,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source",
+                            match=MatchValue(value=source_path),
+                        )
+                    ]
+                ),
+            )
+            count = count_result.count
+
+            if count > 0:
+                self.client.delete(
+                    collection_name=collection_name,
+                    points_selector=Filter(
+                        must=[
+                            FieldCondition(
+                                key="source",
+                                match=MatchValue(value=source_path),
+                            )
+                        ]
+                    ),
+                )
+
+            return count
+        except Exception as e:
+            print(f"Error deleting chunks for {source_path}: {e}")
+            return 0
 
     def load_documents_from_directory(self, directory: str, source_name: str) -> List[Document]:
         """Load all markdown and text files from a directory"""
@@ -357,16 +453,16 @@ class DocumentIngestionPipeline:
         print(f"Successfully ingested {len(chunks)} chunks into Qdrant")
         return vectorstore
 
-    def run(self, use_raw_loading: bool = True):
+    def run(self, use_raw_loading: bool = True, force_full: bool = False, dry_run: bool = False):
         """
-        Main ingestion pipeline
+        Main ingestion pipeline with incremental support.
 
         Args:
             use_raw_loading: If True and using semantic chunking, load markdown files
                            directly to preserve structure. If False, use LangChain loaders.
+            force_full: If True, force full re-ingestion ignoring registry.
+            dry_run: If True, only show what would be processed without making changes.
         """
-        all_documents = []
-
         # Documentation sources to ingest
         doc_sources = {
             "kubernetes": os.path.join(DOCS_DIR, "kubernetes"),
@@ -378,34 +474,214 @@ class DocumentIngestionPipeline:
             "custom": CUSTOM_DOCS_DIR,
         }
 
-        # Load documents from each source
+        # Check if config changed (forces full re-ingestion)
+        config_changed = self._config_changed()
+        if config_changed and not force_full:
+            print("\nChunking configuration changed. Recommend running with --full flag.")
+            print("Continuing with incremental mode may result in inconsistent chunks.\n")
+
+        if force_full:
+            print("\n*** FULL RE-INGESTION MODE ***")
+            print("All documents will be re-processed regardless of changes.\n")
+
+        if dry_run:
+            print("\n*** DRY RUN MODE ***")
+            print("No changes will be made. Showing what would be processed.\n")
+
+        # Collect all files with their hashes
+        total_stats = {
+            'new': 0, 'changed': 0, 'deleted': 0, 'unchanged': 0,
+            'chunks_created': 0, 'chunks_deleted': 0
+        }
+
+        all_documents_to_process = []
+        all_files_to_delete = []
+
         for source_name, directory in doc_sources.items():
-            if os.path.exists(directory):
-                print(f"\n{'='*60}")
-                print(f"Processing {source_name} documentation...")
-                print(f"{'='*60}")
-
-                # Choose loading method based on chunking mode
-                if self.use_semantic_chunking and use_raw_loading:
-                    # Load raw markdown to preserve structure for semantic chunking
-                    docs = self.load_raw_markdown_files(directory, source_name)
-                else:
-                    # Use LangChain loaders
-                    docs = self.load_documents_from_directory(directory, source_name)
-
-                all_documents.extend(docs)
-            else:
+            if not os.path.exists(directory):
                 print(f"Directory not found: {directory} (skipping {source_name})")
+                continue
 
-        # Ingest all documents
-        if all_documents:
             print(f"\n{'='*60}")
-            print(f"Total documents loaded: {len(all_documents)}")
-            print(f"{'='*60}\n")
-            self.ingest_documents(all_documents)
+            print(f"Scanning {source_name} documentation...")
+            print(f"{'='*60}")
+
+            # Scan directory for all files with hashes
+            current_files = scan_directory_with_hashes(
+                Path(directory),
+                extensions={'.md', '.txt', '.rst'},
+            )
+
+            if not current_files:
+                print(f"No files found in {directory}")
+                continue
+
+            if force_full:
+                # In full mode, treat all files as new
+                new_files = list(current_files.keys())
+                changed_files = []
+                deleted_files = []
+                unchanged_files = []
+            else:
+                # Detect changes using registry
+                changes = self.registry.detect_changes(current_files, source_type=source_name)
+                new_files = changes.new_files
+                changed_files = changes.changed_files
+                deleted_files = changes.deleted_files
+                unchanged_files = changes.unchanged_files
+
+            print(f"  Total files: {len(current_files)}")
+            print(f"  New: {len(new_files)}, Changed: {len(changed_files)}, "
+                  f"Deleted: {len(deleted_files)}, Unchanged: {len(unchanged_files)}")
+
+            # Update stats
+            total_stats['new'] += len(new_files)
+            total_stats['changed'] += len(changed_files)
+            total_stats['deleted'] += len(deleted_files)
+            total_stats['unchanged'] += len(unchanged_files)
+
+            # Collect files to process
+            files_to_process = new_files + changed_files
+
+            if files_to_process:
+                for file_path in files_to_process:
+                    try:
+                        path = Path(file_path)
+                        content = path.read_text(encoding='utf-8')
+
+                        doc = Document(
+                            page_content=content,
+                            metadata={
+                                'source': file_path,
+                                'source_type': source_name,
+                                'file_type': 'markdown' if path.suffix == '.md' else 'text',
+                                'file_name': path.name,
+                                'relative_path': str(path.relative_to(Path(directory))),
+                                'content_hash': current_files[file_path],
+                                'file_size': path.stat().st_size,
+                            }
+                        )
+                        all_documents_to_process.append(doc)
+                    except Exception as e:
+                        print(f"Error loading {file_path}: {e}")
+
+            # Collect deleted files
+            all_files_to_delete.extend(deleted_files)
+
+            # For changed files, we need to delete old chunks first
+            for file_path in changed_files:
+                all_files_to_delete.append(file_path)
+
+        # Summary
+        print(f"\n{'='*60}")
+        print("INGESTION SUMMARY")
+        print(f"{'='*60}")
+        print(f"Files to process: {len(all_documents_to_process)} "
+              f"(new: {total_stats['new']}, changed: {total_stats['changed']})")
+        print(f"Files to delete: {len(all_files_to_delete)}")
+        print(f"Unchanged files: {total_stats['unchanged']}")
+
+        if dry_run:
+            if all_documents_to_process:
+                print("\nFiles that would be processed:")
+                for doc in all_documents_to_process[:20]:  # Show first 20
+                    print(f"  + {doc.metadata['source']}")
+                if len(all_documents_to_process) > 20:
+                    print(f"  ... and {len(all_documents_to_process) - 20} more")
+
+            if all_files_to_delete:
+                print("\nFiles that would have chunks deleted:")
+                for f in all_files_to_delete[:20]:
+                    print(f"  - {f}")
+                if len(all_files_to_delete) > 20:
+                    print(f"  ... and {len(all_files_to_delete) - 20} more")
+
+            print("\nDry run complete. No changes made.")
+            return
+
+        # Delete chunks for removed/changed files
+        if all_files_to_delete:
+            print(f"\nDeleting chunks for {len(all_files_to_delete)} files...")
+            for file_path in tqdm(all_files_to_delete, desc="Deleting old chunks"):
+                deleted_count = self.delete_chunks_for_file(file_path)
+                total_stats['chunks_deleted'] += deleted_count
+
+                # Remove from registry if file no longer exists
+                if file_path not in [d.metadata['source'] for d in all_documents_to_process]:
+                    self.registry.delete_file(file_path)
+
+            print(f"Deleted {total_stats['chunks_deleted']} old chunks")
+
+        # Process new/changed documents
+        if all_documents_to_process:
+            print(f"\nProcessing {len(all_documents_to_process)} documents...")
+            chunks = self.split_documents(all_documents_to_process)
+
+            if chunks:
+                print(f"Created {len(chunks)} chunks")
+                total_stats['chunks_created'] = len(chunks)
+
+                # Ingest chunks
+                self._ingest_chunks_with_registry(chunks)
+
+                # Update config hash after successful ingestion
+                self.registry.set_config_hash(self._get_config_hash())
+
+        print(f"\n{'='*60}")
+        print("INGESTION COMPLETE")
+        print(f"{'='*60}")
+        print(f"Chunks created: {total_stats['chunks_created']}")
+        print(f"Chunks deleted: {total_stats['chunks_deleted']}")
+        print_stats(self.registry)
+
+    def _ingest_chunks_with_registry(self, chunks: List[Document], collection_name: str = COLLECTION_NAME):
+        """
+        Ingest chunks and update the registry with file tracking.
+
+        Args:
+            chunks: List of Document chunks to ingest
+            collection_name: Qdrant collection name
+        """
+        if not chunks:
+            return
+
+        print(f"Ingesting {len(chunks)} chunks into Qdrant...")
+
+        # Group chunks by source file for registry tracking
+        chunks_by_source: Dict[str, List[Document]] = {}
+        for chunk in chunks:
+            source = chunk.metadata.get('source', 'unknown')
+            if source not in chunks_by_source:
+                chunks_by_source[source] = []
+            chunks_by_source[source].append(chunk)
+
+        # Use hybrid ingestion if enabled
+        if self.use_hybrid and self.sparse_encoder is not None:
+            self._ingest_hybrid(chunks, collection_name)
         else:
-            print("No documents found to ingest!")
-            sys.exit(1)
+            # Dense-only ingestion
+            Qdrant.from_documents(
+                chunks,
+                self.embeddings,
+                host=QDRANT_HOST,
+                port=QDRANT_PORT,
+                collection_name=collection_name,
+                force_recreate=False,
+            )
+
+        # Update registry for each file
+        for source_path, source_chunks in chunks_by_source.items():
+            if source_chunks:
+                first_chunk = source_chunks[0]
+                self.registry.update_file(
+                    file_path=source_path,
+                    content_hash=first_chunk.metadata.get('content_hash', ''),
+                    source_type=first_chunk.metadata.get('source_type', 'unknown'),
+                    chunk_count=len(source_chunks),
+                    file_size=first_chunk.metadata.get('file_size', 0),
+                )
+
+        print(f"Successfully ingested {len(chunks)} chunks and updated registry")
 
 
 def ingest_single_file(
@@ -462,15 +738,89 @@ def ingest_single_file(
     return len(chunks)
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="DevOps Documentation Ingestion Pipeline with incremental support",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python ingest_docs.py              # Incremental ingestion (default)
+  python ingest_docs.py --full       # Force full re-ingestion
+  python ingest_docs.py --dry-run    # Preview what would be processed
+  python ingest_docs.py --stats      # Show registry statistics only
+  python ingest_docs.py --source kubernetes  # Process only kubernetes docs
+        """
+    )
+
+    parser.add_argument(
+        '--full', '-f',
+        action='store_true',
+        help='Force full re-ingestion, ignoring registry (processes all files)'
+    )
+
+    parser.add_argument(
+        '--dry-run', '-n',
+        action='store_true',
+        help='Show what would be processed without making changes'
+    )
+
+    parser.add_argument(
+        '--stats', '-s',
+        action='store_true',
+        help='Show registry statistics and exit'
+    )
+
+    parser.add_argument(
+        '--source',
+        type=str,
+        help='Process only a specific source (e.g., kubernetes, terraform)'
+    )
+
+    parser.add_argument(
+        '--clear-registry',
+        action='store_true',
+        help='Clear the ingestion registry (use with --full to re-index everything)'
+    )
+
+    parser.add_argument(
+        '--legacy-chunking',
+        action='store_true',
+        help='Use legacy RecursiveCharacterTextSplitter instead of semantic chunking'
+    )
+
+    return parser.parse_args()
+
+
 def main():
-    # Determine chunking mode from environment
-    use_semantic = CHUNKING_MODE.lower() == "semantic"
+    args = parse_args()
+
+    # Initialize registry for stats/clear operations
+    registry = IngestionRegistry()
+
+    # Handle stats-only mode
+    if args.stats:
+        print("Ingestion Registry Statistics")
+        print_stats(registry)
+        return
+
+    # Handle clear registry
+    if args.clear_registry:
+        count = registry.clear()
+        print(f"Cleared {count} entries from the ingestion registry")
+        if not args.full:
+            print("Tip: Use --full flag to re-index all documents")
+        return
+
+    # Determine chunking mode
+    use_semantic = CHUNKING_MODE.lower() == "semantic" and not args.legacy_chunking
 
     print("Starting DevOps Documentation Ingestion Pipeline...")
     print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
     print(f"Collection: {COLLECTION_NAME}")
     print(f"Chunking mode: {'semantic' if use_semantic else 'legacy'}")
     print(f"Hybrid search: {'enabled' if HYBRID_SEARCH_ENABLED else 'disabled'}")
+    print(f"Incremental mode: {'disabled (--full)' if args.full else 'enabled'}")
 
     if not use_semantic:
         print(f"Chunk size: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP}")
@@ -478,7 +828,11 @@ def main():
     print()  # Blank line for readability
 
     pipeline = DocumentIngestionPipeline(use_semantic_chunking=use_semantic)
-    pipeline.run(use_raw_loading=use_semantic)
+    pipeline.run(
+        use_raw_loading=use_semantic,
+        force_full=args.full,
+        dry_run=args.dry_run,
+    )
 
     print("\nIngestion complete!")
 

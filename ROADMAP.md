@@ -311,14 +311,37 @@ def search(self, query: str, top_k: int = None) -> List[Document]:
         redis_client.setex(cache_key, 3600, json.dumps(query_embedding))
 ```
 
-#### 4. Incremental Document Ingestion
+#### 4. Incremental Document Ingestion ✅
 
-Add file-level change tracking:
+**Impact:** Faster updates, reduced redundancy | **Effort:** Medium | **Status:** DONE
 
-- Hash content + path before embedding
-- Query Qdrant for existing hashes
-- Skip already-indexed documents
-- Track: timestamp, version, source commit SHA
+Implementation uses SHA-256 content hashing with SQLite registry for change detection.
+
+**Files:**
+- `scripts/ingestion_registry.py` - SQLite registry for tracking ingested files
+- `scripts/ingest_docs.py` - Updated with incremental logic and CLI flags
+- `backend/app/vectorstore.py` - Added `delete_by_source()` for chunk management
+
+**Features:**
+- SHA-256 content hash per file for change detection
+- SQLite registry at `data/ingestion_registry.db`
+- Automatic detection of new, changed, deleted files
+- Chunking config change detection (triggers re-ingestion warning)
+- CLI flags for flexible operation
+
+**CLI Usage:**
+```bash
+python ingest_docs.py              # Incremental (default)
+python ingest_docs.py --full       # Force full re-ingestion
+python ingest_docs.py --dry-run    # Preview changes without ingesting
+python ingest_docs.py --stats      # Show registry statistics
+python ingest_docs.py --clear-registry  # Reset registry
+```
+
+**Performance:**
+- First run: Full ingestion (same as before)
+- Subsequent runs: Only new/changed files processed
+- Change detection: ~5-10s for 10k files (hash computation)
 
 #### 5. Add PostgreSQL
 
@@ -397,8 +420,8 @@ hnsw_config=HnswConfigDiff(
 - [x] Hybrid search (BM25 + vector) with RRF fusion - 15-80ms retrieval on 128k docs
 - [x] HyDE query expansion for vague queries (~2.2s generation, smart skip patterns)
 - [x] Web search fallback (Tavily) for queries with low local retrieval scores
+- [x] Incremental ingestion with change detection (SHA-256 hash tracking, SQLite registry)
 - [ ] PostgreSQL for analytics/metadata
-- [ ] Incremental ingestion with change detection
 - [ ] A/B testing framework
 - [ ] User accounts & persistent sessions
 

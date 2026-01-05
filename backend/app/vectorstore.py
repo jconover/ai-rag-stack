@@ -725,6 +725,142 @@ class VectorStore:
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
+    def delete_by_source(self, source_path: str) -> Dict[str, Any]:
+        """
+        Delete all chunks from a specific source file path.
+
+        Used for incremental ingestion to remove outdated chunks before
+        re-ingesting a changed file.
+
+        Args:
+            source_path: The source file path (as stored in chunk metadata)
+
+        Returns:
+            Dict with operation status and count of deleted points
+        """
+        try:
+            # First count how many points will be deleted
+            count = self.count_by_source(source_path)
+
+            result = self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source",
+                            match=MatchValue(value=source_path),
+                        )
+                    ]
+                ),
+            )
+            return {
+                "status": "success",
+                "deleted_count": count,
+                "operation_id": str(result.operation_id) if result else None
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e), "deleted_count": 0}
+
+    def count_by_source(self, source_path: str) -> int:
+        """
+        Count chunks from a specific source file path.
+
+        Args:
+            source_path: The source file path
+
+        Returns:
+            Number of chunks from this source
+        """
+        try:
+            result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source",
+                            match=MatchValue(value=source_path),
+                        )
+                    ]
+                ),
+            )
+            return result.count
+        except Exception as e:
+            logger.error(f"Error counting chunks for {source_path}: {e}")
+            return 0
+
+    def count_by_source_type(self, source_type: str) -> int:
+        """
+        Count all chunks with a specific source type.
+
+        Args:
+            source_type: The source type to count
+
+        Returns:
+            Number of chunks with this source type
+        """
+        try:
+            result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source_type",
+                            match=MatchValue(value=source_type),
+                        )
+                    ]
+                ),
+            )
+            return result.count
+        except Exception as e:
+            logger.error(f"Error counting chunks for source_type {source_type}: {e}")
+            return 0
+
+    def get_sources_for_type(self, source_type: str) -> List[str]:
+        """
+        Get all unique source file paths for a given source type.
+
+        Useful for incremental ingestion to compare indexed files
+        against current files on disk.
+
+        Args:
+            source_type: The source type to query
+
+        Returns:
+            List of unique source file paths
+        """
+        try:
+            sources = set()
+            offset = None
+
+            while True:
+                result, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="source_type",
+                                match=MatchValue(value=source_type),
+                            )
+                        ]
+                    ),
+                    limit=1000,
+                    offset=offset,
+                    with_payload=["source"],
+                    with_vectors=False,
+                )
+
+                for point in result:
+                    if point.payload and 'source' in point.payload:
+                        sources.add(point.payload['source'])
+
+                if offset is None:
+                    break
+
+            return sorted(list(sources))
+        except Exception as e:
+            logger.error(f"Error getting sources for {source_type}: {e}")
+            return []
+
 
 # Singleton instance
 vector_store = VectorStore()
