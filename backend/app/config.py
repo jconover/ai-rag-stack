@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     hybrid_rrf_k: int = int(os.getenv("HYBRID_RRF_K", 60))  # RRF constant (higher = more emphasis on top ranks)
     sparse_encoder_model: str = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
 
+    # HyDE (Hypothetical Document Embeddings) query expansion
+    hyde_enabled: bool = os.getenv("HYDE_ENABLED", "false").lower() == "true"
+    hyde_model: str = os.getenv("HYDE_MODEL", "llama3.1:8b")
+    hyde_temperature: float = float(os.getenv("HYDE_TEMPERATURE", "0.3"))
+    hyde_max_tokens: int = int(os.getenv("HYDE_MAX_TOKENS", "256"))
+    hyde_min_query_length: int = int(os.getenv("HYDE_MIN_QUERY_LENGTH", "10"))
+    hyde_max_query_length: int = int(os.getenv("HYDE_MAX_QUERY_LENGTH", "500"))
+    hyde_timeout_seconds: float = float(os.getenv("HYDE_TIMEOUT_SECONDS", "10.0"))
+
     # Metrics and logging
     enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
     log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"

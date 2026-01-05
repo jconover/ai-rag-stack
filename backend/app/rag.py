@@ -20,6 +20,7 @@ from app.config import settings
 from app.vectorstore import vector_store
 from app.reranker import rerank_documents, get_reranker
 from app.metrics import retrieval_metrics_logger, RetrievalTimer, RetrievalMetrics
+from app.query_expansion import hyde_expander
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,10 @@ class RetrievalResult:
     hybrid_search_used: bool = False
     dense_count: int = 0
     sparse_count: int = 0
+    # HyDE (Hypothetical Document Embeddings) fields
+    hyde_used: bool = False
+    hyde_time_ms: float = 0.0
+    hyde_skipped_reason: Optional[str] = None
 
 
 class RAGPipeline:
@@ -122,20 +127,38 @@ Question: {query}"""
         else:
             initial_top_k = settings.top_k_results
 
+        # Phase 0: HyDE query expansion (if enabled)
+        search_query = query
+        if settings.hyde_enabled:
+            hyde_result = hyde_expander.expand_sync(query)
+            result.hyde_time_ms = hyde_result.generation_time_ms
+
+            if hyde_result.expanded and hyde_result.hypothetical_document:
+                # Use hypothetical document for retrieval (better semantic match)
+                search_query = hyde_result.hypothetical_document
+                result.hyde_used = True
+                if settings.log_retrieval_details:
+                    logger.info(
+                        f"HyDE expanded query in {result.hyde_time_ms:.1f}ms: "
+                        f"'{query[:50]}...' -> {len(hyde_result.hypothetical_document)} chars"
+                    )
+            else:
+                result.hyde_skipped_reason = hyde_result.skip_reason or hyde_result.error
+
         # Phase 1: Vector search with scores (hybrid or dense-only)
         retrieval_start = time.perf_counter()
         try:
             # Use hybrid search if enabled, otherwise dense-only
             if settings.hybrid_search_enabled:
                 results_with_scores = vector_store.hybrid_search_with_scores(
-                    query=query,
+                    query=search_query,
                     top_k=initial_top_k,
                     min_score=settings.min_similarity_score
                 )
                 result.hybrid_search_used = True
             else:
                 results_with_scores = vector_store.search_with_scores(
-                    query=query,
+                    query=search_query,
                     top_k=initial_top_k,
                     min_score=settings.min_similarity_score
                 )
@@ -350,6 +373,8 @@ Question: {query}"""
             'rerank_time_ms': round(result.rerank_time_ms, 2) if result.reranker_used else None,
             'total_time_ms': round(result.total_time_ms, 2),
             'hybrid_search_used': result.hybrid_search_used,
+            'hyde_used': result.hyde_used,
+            'hyde_time_ms': round(result.hyde_time_ms, 2) if result.hyde_used else None,
         }
 
         # Calculate average scores

@@ -83,6 +83,7 @@ services:
       - RERANKER_ENABLED=true
       - ENABLE_PROMETHEUS_METRICS=true
       - HYBRID_SEARCH_ENABLED=true
+      - HYDE_ENABLED=true
     depends_on:
       ollama:
         condition: service_healthy
