@@ -269,17 +269,30 @@ Question: {query}"""
 
         # Phase 3: Web search fallback (if enabled and local results are poor)
         if settings.web_search_enabled:
-            avg_score = (
-                sum(result.similarity_scores) / len(result.similarity_scores)
-                if result.similarity_scores else 0.0
-            )
-            max_score = max(result.similarity_scores) if result.similarity_scores else 0.0
+            # Use rerank scores if available (better quality signal than RRF similarity)
+            if result.reranker_used and result.rerank_scores:
+                avg_rerank = sum(result.rerank_scores) / len(result.rerank_scores)
+                # Rerank scores: positive = relevant, negative = irrelevant
+                # Trigger web search if avg rerank score is negative (poor relevance)
+                if avg_rerank < 0:
+                    should_search = True
+                    reason = f"low_rerank_score_{avg_rerank:.2f}"
+                else:
+                    should_search = False
+                    reason = None
+            else:
+                # Fallback to similarity scores if reranker not used
+                avg_score = (
+                    sum(result.similarity_scores) / len(result.similarity_scores)
+                    if result.similarity_scores else 0.0
+                )
+                max_score = max(result.similarity_scores) if result.similarity_scores else 0.0
 
-            should_search, reason = web_searcher.should_search(
-                avg_similarity_score=avg_score,
-                max_similarity_score=max_score,
-                result_count=result.final_count,
-            )
+                should_search, reason = web_searcher.should_search(
+                    avg_similarity_score=avg_score,
+                    max_similarity_score=max_score,
+                    result_count=result.final_count,
+                )
 
             if should_search:
                 result.web_search_trigger_reason = reason
