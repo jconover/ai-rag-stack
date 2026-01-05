@@ -525,11 +525,14 @@ class VectorStore:
         # Fetch more results than needed for RRF fusion
         fetch_limit = min(top_k * 4, 100)
 
-        # Execute dense search
+        # Execute dense search (using named vector for hybrid collections)
         try:
             dense_results = self.client.search(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query_vector=NamedVector(
+                    name=self.DENSE_VECTOR_NAME,
+                    vector=query_vector,
+                ),
                 limit=fetch_limit,
                 query_filter=query_filter,
                 search_params=search_params,

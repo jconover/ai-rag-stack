@@ -28,6 +28,7 @@ class RetrievalMetrics(BaseModel):
     after_reranking: Optional[int] = Field(None, description="Number of results after reranking")
     reranker_used: bool = Field(False, description="Whether reranker was applied")
     reranker_model: Optional[str] = Field(None, description="Reranker model used")
+    hybrid_search_used: bool = Field(False, description="Whether hybrid search (BM25 + vector) was used")
     avg_similarity_score: Optional[float] = Field(None, description="Average similarity score")
     avg_rerank_score: Optional[float] = Field(None, description="Average rerank score")
     retrieval_time_ms: Optional[float] = Field(None, description="Time for vector retrieval in ms")
