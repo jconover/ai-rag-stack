@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     min_similarity_score: float = float(os.getenv("MIN_SIMILARITY_SCORE", 0.3))
     min_rerank_score: float = float(os.getenv("MIN_RERANK_SCORE", 0.01))
 
+    # Hybrid Search - BM25 (sparse) + Vector (dense) with RRF fusion
+    hybrid_search_enabled: bool = os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
+    hybrid_search_alpha: float = float(os.getenv("HYBRID_SEARCH_ALPHA", 0.5))  # Weight for dense vs sparse (0=sparse only, 1=dense only)
+    hybrid_rrf_k: int = int(os.getenv("HYBRID_RRF_K", 60))  # RRF constant (higher = more emphasis on top ranks)
+    sparse_encoder_model: str = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
+
     # Metrics and logging
     enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
     log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"

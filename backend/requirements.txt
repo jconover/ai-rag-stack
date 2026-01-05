@@ -39,6 +39,13 @@ langchain-huggingface>=0.1.0
 # Models used: all-MiniLM-L6-v2 (embedding), cross-encoder/ms-marco-MiniLM-L-6-v2 (reranking)
 sentence-transformers>=2.3.0
 
+# -----------------------------------------------------------------------------
+# Hybrid Search (Phase 4)
+# -----------------------------------------------------------------------------
+# fastembed for BM25 sparse vector generation (hybrid search)
+# Model used: Qdrant/bm25 for sparse embeddings
+fastembed>=0.2.0
+
 # PyTorch - CPU version installed separately in Dockerfile for smaller image
 # See requirements-gpu.txt for CUDA-enabled PyTorch
 torch>=2.1.0

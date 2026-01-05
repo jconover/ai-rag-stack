@@ -39,6 +39,10 @@ class RetrievalResult:
     reranker_model: Optional[str] = None
     retrieval_error: Optional[str] = None
     rerank_error: Optional[str] = None
+    # Hybrid search fields
+    hybrid_search_used: bool = False
+    dense_count: int = 0
+    sparse_count: int = 0
 
 
 class RAGPipeline:
@@ -118,14 +122,23 @@ Question: {query}"""
         else:
             initial_top_k = settings.top_k_results
 
-        # Phase 1: Vector search with scores
+        # Phase 1: Vector search with scores (hybrid or dense-only)
         retrieval_start = time.perf_counter()
         try:
-            results_with_scores = vector_store.search_with_scores(
-                query=query,
-                top_k=initial_top_k,
-                min_score=settings.min_similarity_score
-            )
+            # Use hybrid search if enabled, otherwise dense-only
+            if settings.hybrid_search_enabled:
+                results_with_scores = vector_store.hybrid_search_with_scores(
+                    query=query,
+                    top_k=initial_top_k,
+                    min_score=settings.min_similarity_score
+                )
+                result.hybrid_search_used = True
+            else:
+                results_with_scores = vector_store.search_with_scores(
+                    query=query,
+                    top_k=initial_top_k,
+                    min_score=settings.min_similarity_score
+                )
             result.retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
             result.initial_count = len(results_with_scores)
 
@@ -336,6 +349,7 @@ Question: {query}"""
             'retrieval_time_ms': round(result.retrieval_time_ms, 2),
             'rerank_time_ms': round(result.rerank_time_ms, 2) if result.reranker_used else None,
             'total_time_ms': round(result.total_time_ms, 2),
+            'hybrid_search_used': result.hybrid_search_used,
         }
 
         # Calculate average scores

@@ -118,16 +118,28 @@ def rerank(query: str, docs: List, top_k: int = 5):
     return [doc for doc, _ in ranked[:top_k]]
 ```
 
-#### 2. Implement Hybrid Search (BM25 + Vector)
+#### 2. Implement Hybrid Search (BM25 + Vector) ✅
 
-**Impact:** Better keyword queries | **Effort:** Medium
+**Impact:** Better keyword queries | **Effort:** Medium | **Status:** DONE
 
-Qdrant supports sparse vectors for hybrid search:
+Implementation uses Qdrant native sparse vectors with fastembed BM25:
 
 ```python
-# Combine with reciprocal rank fusion
-score = 1/(k + rank_dense) + 1/(k + rank_sparse)
+# Reciprocal Rank Fusion (RRF) combining dense and sparse results
+score = alpha * (1/(k + rank_dense)) + (1-alpha) * (1/(k + rank_sparse))
 ```
+
+**Files:**
+- `backend/app/sparse_encoder.py` - BM25 sparse encoding with fastembed
+- `backend/app/vectorstore.py` - `hybrid_search_with_scores()` method
+- `backend/app/rag.py` - Integration with RAG pipeline
+- `scripts/ingest_docs.py` - Hybrid ingestion support
+
+**Configuration:**
+- `HYBRID_SEARCH_ENABLED=true` - Enable hybrid search
+- `HYBRID_SEARCH_ALPHA=0.5` - Balance dense/sparse (0.5 = equal weight)
+- `HYBRID_RRF_K=60` - RRF constant
+- `SPARSE_ENCODER_MODEL=Qdrant/bm25` - Sparse encoder model
 
 #### 3. Semantic Chunking (Markdown-Aware)
 
@@ -335,7 +347,7 @@ hnsw_config=HnswConfigDiff(
 
 ### Phase 4: Advanced Features (Month 2)
 
-- [ ] Hybrid search (BM25 + vector)
+- [x] Hybrid search (BM25 + vector) with RRF fusion
 - [ ] PostgreSQL for analytics/metadata
 - [ ] Incremental ingestion with change detection
 - [ ] A/B testing framework
@@ -435,5 +447,5 @@ Post-ingestion checks:
 ---
 
 _Document generated: 2025-01-04_
-_Last updated: 2026-01-04_
+_Last updated: 2026-01-05_
 _Based on reviews from 12 specialized AI agents_

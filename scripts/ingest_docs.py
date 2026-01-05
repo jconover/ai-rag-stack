@@ -30,6 +30,14 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Qdrant
 from langchain_core.documents import Document
 from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    VectorParams,
+    Distance,
+    SparseVectorParams,
+    SparseIndexParams,
+    PointStruct,
+    SparseVector as QdrantSparseVector,
+)
 from tqdm import tqdm
 
 # Import semantic chunker
@@ -55,15 +63,26 @@ EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # Set to 'cuda' for GPU
 # Chunking mode: 'semantic' (new) or 'legacy' (old RecursiveCharacterTextSplitter)
 CHUNKING_MODE = os.getenv("CHUNKING_MODE", "semantic")
 
+# Hybrid search configuration
+HYBRID_SEARCH_ENABLED = os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
+SPARSE_ENCODER_MODEL = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
+
+# Vector constants
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+DENSE_VECTOR_SIZE = 384  # all-MiniLM-L6-v2
+
 
 class DocumentIngestionPipeline:
-    def __init__(self, use_semantic_chunking: bool = True):
+    def __init__(self, use_semantic_chunking: bool = True, use_hybrid: bool = None):
         """
         Initialize the ingestion pipeline.
 
         Args:
             use_semantic_chunking: If True, use MarkdownSemanticChunker.
                                    If False, use legacy RecursiveCharacterTextSplitter.
+            use_hybrid: If True, generate both dense and sparse vectors.
+                       If None, read from HYBRID_SEARCH_ENABLED env var.
         """
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
@@ -89,6 +108,27 @@ class DocumentIngestionPipeline:
             print(f"Using legacy chunking: {CHUNK_SIZE} chars, {CHUNK_OVERLAP} overlap")
 
         self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+        # Hybrid search setup
+        self.use_hybrid = use_hybrid if use_hybrid is not None else HYBRID_SEARCH_ENABLED
+        self.sparse_encoder = None
+
+        if self.use_hybrid:
+            try:
+                from fastembed import SparseTextEmbedding
+                print(f"Initializing sparse encoder: {SPARSE_ENCODER_MODEL}")
+                self.sparse_encoder = SparseTextEmbedding(model_name=SPARSE_ENCODER_MODEL)
+                # Warmup
+                list(self.sparse_encoder.embed(["warmup"]))
+                print("Hybrid search enabled: generating both dense and sparse vectors")
+            except ImportError:
+                print("WARNING: fastembed not installed. Falling back to dense-only vectors.")
+                print("  Install with: pip install fastembed")
+                self.use_hybrid = False
+            except Exception as e:
+                print(f"WARNING: Failed to initialize sparse encoder: {e}")
+                print("  Falling back to dense-only vectors.")
+                self.use_hybrid = False
 
     def load_documents_from_directory(self, directory: str, source_name: str) -> List[Document]:
         """Load all markdown and text files from a directory"""
@@ -205,6 +245,85 @@ class DocumentIngestionPipeline:
 
         return chunks
 
+    def _ensure_hybrid_collection(self, collection_name: str):
+        """Create or verify collection supports hybrid search (dense + sparse vectors)."""
+        collections = self.client.get_collections().collections
+        collection_names = [c.name for c in collections]
+
+        if collection_name not in collection_names:
+            print(f"Creating hybrid collection '{collection_name}'...")
+            self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    DENSE_VECTOR_NAME: VectorParams(
+                        size=DENSE_VECTOR_SIZE,
+                        distance=Distance.COSINE,
+                    )
+                },
+                sparse_vectors_config={
+                    SPARSE_VECTOR_NAME: SparseVectorParams(
+                        index=SparseIndexParams(on_disk=False)
+                    )
+                },
+            )
+            print(f"Created collection '{collection_name}' with hybrid vector support")
+        else:
+            print(f"Collection '{collection_name}' already exists")
+
+    def _ingest_hybrid(self, chunks: List[Document], collection_name: str, batch_size: int = 100):
+        """Ingest documents with both dense and sparse vectors."""
+        self._ensure_hybrid_collection(collection_name)
+
+        print(f"Generating embeddings for {len(chunks)} chunks...")
+
+        # Process in batches
+        total_points = 0
+        for i in tqdm(range(0, len(chunks), batch_size), desc="Ingesting batches"):
+            batch = chunks[i:i + batch_size]
+            texts = [doc.page_content for doc in batch]
+
+            # Generate dense embeddings
+            dense_embeddings = self.embeddings.embed_documents(texts)
+
+            # Generate sparse embeddings
+            sparse_embeddings = list(self.sparse_encoder.embed(texts))
+
+            # Create points with both vector types
+            points = []
+            for j, (doc, dense_vec, sparse_vec) in enumerate(zip(batch, dense_embeddings, sparse_embeddings)):
+                point_id = total_points + j
+
+                # Build payload from document metadata
+                payload = {
+                    'page_content': doc.page_content,
+                    'source': doc.metadata.get('source', 'Unknown'),
+                    'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    **{k: v for k, v in doc.metadata.items()
+                       if k not in ('page_content', 'source', 'source_type')}
+                }
+
+                point = PointStruct(
+                    id=point_id,
+                    vector={
+                        DENSE_VECTOR_NAME: dense_vec,
+                        SPARSE_VECTOR_NAME: QdrantSparseVector(
+                            indices=sparse_vec.indices.tolist(),
+                            values=sparse_vec.values.tolist(),
+                        )
+                    },
+                    payload=payload,
+                )
+                points.append(point)
+
+            # Upsert batch
+            self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+            total_points += len(batch)
+
+        print(f"Successfully ingested {total_points} chunks with hybrid vectors")
+
     def ingest_documents(self, documents: List[Document], collection_name: str = COLLECTION_NAME):
         """Split documents and ingest into Qdrant"""
         if not documents:
@@ -220,7 +339,12 @@ class DocumentIngestionPipeline:
 
         print(f"Ingesting into Qdrant collection '{collection_name}'...")
 
-        # Create or update vector store
+        # Use hybrid ingestion if enabled
+        if self.use_hybrid and self.sparse_encoder is not None:
+            self._ingest_hybrid(chunks, collection_name)
+            return None  # Hybrid ingestion doesn't return a vectorstore
+
+        # Create or update vector store (dense-only)
         vectorstore = Qdrant.from_documents(
             chunks,
             self.embeddings,
@@ -346,9 +470,12 @@ def main():
     print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
     print(f"Collection: {COLLECTION_NAME}")
     print(f"Chunking mode: {'semantic' if use_semantic else 'legacy'}")
+    print(f"Hybrid search: {'enabled' if HYBRID_SEARCH_ENABLED else 'disabled'}")
 
     if not use_semantic:
-        print(f"Chunk size: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP}\n")
+        print(f"Chunk size: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP}")
+
+    print()  # Blank line for readability
 
     pipeline = DocumentIngestionPipeline(use_semantic_chunking=use_semantic)
     pipeline.run(use_raw_loading=use_semantic)

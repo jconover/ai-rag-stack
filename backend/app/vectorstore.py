@@ -1,4 +1,10 @@
-"""Qdrant vector store management with optimized search and performance tuning"""
+"""Qdrant vector store management with optimized search and performance tuning.
+
+Supports both dense-only and hybrid (dense + sparse) search modes:
+- Dense: Semantic similarity using sentence-transformers embeddings
+- Sparse: BM25 keyword matching using fastembed
+- Hybrid: Combines both using Reciprocal Rank Fusion (RRF)
+"""
 from typing import List, Optional, Tuple, Dict, Any, Union
 import logging
 from qdrant_client import QdrantClient
@@ -18,6 +24,11 @@ from qdrant_client.models import (
     MatchValue,
     PayloadSchemaType,
     SearchRequest,
+    SparseVectorParams,
+    SparseIndexParams,
+    NamedVector,
+    NamedSparseVector,
+    SparseVector as QdrantSparseVector,
 )
 from langchain_huggingface import HuggingFaceEmbeddings
 try:
@@ -28,6 +39,20 @@ except ImportError:
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Sparse encoder for hybrid search (lazy loaded)
+_sparse_encoder = None
+
+def _get_sparse_encoder():
+    """Get or initialize the sparse encoder for hybrid search."""
+    global _sparse_encoder
+    if _sparse_encoder is None and settings.hybrid_search_enabled:
+        try:
+            from app.sparse_encoder import SparseEncoder
+            _sparse_encoder = SparseEncoder()
+        except Exception as e:
+            logger.warning(f"Failed to initialize sparse encoder: {e}")
+    return _sparse_encoder
 
 
 class VectorStore:
@@ -55,6 +80,10 @@ class VectorStore:
     ENABLE_QUANTIZATION = True
     QUANTIZATION_RESCORE = True
     QUANTIZATION_OVERSAMPLING = 2.0
+
+    # Named vector constants for hybrid search
+    DENSE_VECTOR_NAME = "dense"
+    SPARSE_VECTOR_NAME = "sparse"
 
     def __init__(self):
         self.client = QdrantClient(
@@ -417,6 +446,161 @@ class VectorStore:
             all_results.append(processed)
 
         return all_results
+
+    def hybrid_search_with_scores(
+        self,
+        query: str,
+        top_k: int = None,
+        min_score: float = None,
+        source_type: str = None,
+        source: str = None,
+        alpha: float = None,
+    ) -> List[Tuple[Document, float]]:
+        """
+        Hybrid search combining dense (semantic) and sparse (BM25) retrieval.
+
+        Uses Reciprocal Rank Fusion (RRF) to combine results from both
+        search methods, providing benefits of:
+        - Semantic understanding from dense vectors
+        - Exact keyword matching from sparse vectors
+
+        Falls back to dense-only search if:
+        - Hybrid search is disabled in settings
+        - Sparse encoder fails to initialize
+        - Collection doesn't have sparse vectors
+
+        Args:
+            query: Search query string
+            top_k: Maximum number of results
+            min_score: Minimum similarity score threshold (0-1)
+            source_type: Filter by document source type
+            source: Filter by specific source document path
+            alpha: Weight for dense vs sparse (0=sparse only, 1=dense only)
+                   Default from settings (0.5 weights both equally)
+
+        Returns:
+            List of (Document, score) tuples, sorted by fused score descending
+        """
+        if top_k is None:
+            top_k = settings.top_k_results
+        if min_score is None:
+            min_score = settings.min_similarity_score
+        if alpha is None:
+            alpha = settings.hybrid_search_alpha
+
+        # Check if hybrid search should be used
+        sparse_encoder = _get_sparse_encoder()
+        if not settings.hybrid_search_enabled or sparse_encoder is None:
+            logger.debug("Hybrid search disabled, falling back to dense-only")
+            return self.search_with_scores(
+                query=query,
+                top_k=top_k,
+                min_score=min_score,
+                source_type=source_type,
+                source=source,
+            )
+
+        # Generate dense embedding
+        query_vector = self.embeddings.embed_query(query)
+
+        # Generate sparse embedding
+        try:
+            sparse_vector = sparse_encoder.encode_query(query)
+        except Exception as e:
+            logger.warning(f"Sparse encoding failed: {e}, falling back to dense-only")
+            return self.search_with_scores(
+                query=query,
+                top_k=top_k,
+                min_score=min_score,
+                source_type=source_type,
+                source=source,
+            )
+
+        # Build filter conditions
+        query_filter = self._build_filter(source_type=source_type, source=source)
+
+        # Get optimized search parameters
+        search_params = self._get_search_params()
+
+        # Fetch more results than needed for RRF fusion
+        fetch_limit = min(top_k * 4, 100)
+
+        # Execute dense search
+        try:
+            dense_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=fetch_limit,
+                query_filter=query_filter,
+                search_params=search_params,
+                with_payload=True,
+            )
+        except Exception as e:
+            logger.error(f"Dense search failed: {e}")
+            dense_results = []
+
+        # Execute sparse search
+        sparse_results = []
+        try:
+            # Check if collection supports sparse vectors
+            collection_info = self.client.get_collection(self.collection_name)
+            has_sparse = False
+
+            # Check for sparse vectors in collection config
+            if hasattr(collection_info.config, 'params'):
+                params = collection_info.config.params
+                if hasattr(params, 'sparse_vectors') and params.sparse_vectors:
+                    has_sparse = self.SPARSE_VECTOR_NAME in params.sparse_vectors
+
+            if has_sparse and sparse_vector.indices:
+                sparse_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=NamedSparseVector(
+                        name=self.SPARSE_VECTOR_NAME,
+                        vector=QdrantSparseVector(
+                            indices=sparse_vector.indices,
+                            values=sparse_vector.values,
+                        )
+                    ),
+                    limit=fetch_limit,
+                    query_filter=query_filter,
+                    with_payload=True,
+                )
+            else:
+                logger.debug("Collection doesn't support sparse vectors, using dense only")
+        except Exception as e:
+            logger.warning(f"Sparse search failed: {e}, using dense results only")
+
+        # If no sparse results, return dense results only
+        if not sparse_results:
+            return self._process_search_results(dense_results, min_score, top_k)
+
+        # Convert results to (Document, score) format for RRF
+        dense_docs_scores = self._process_search_results(dense_results, 0.0, fetch_limit)
+        sparse_docs_scores = self._process_search_results(sparse_results, 0.0, fetch_limit)
+
+        # Apply Reciprocal Rank Fusion
+        from app.sparse_encoder import reciprocal_rank_fusion
+
+        fused_results = reciprocal_rank_fusion(
+            dense_results=dense_docs_scores,
+            sparse_results=sparse_docs_scores,
+            k=settings.hybrid_rrf_k,
+            alpha=alpha,
+        )
+
+        # Apply minimum score threshold and limit
+        filtered_results = [
+            (doc, score) for doc, score in fused_results
+            if score >= min_score * 0.01  # RRF scores are much smaller
+        ][:top_k]
+
+        logger.debug(
+            f"Hybrid search: {len(dense_docs_scores)} dense, {len(sparse_docs_scores)} sparse, "
+            f"{len(filtered_results)} fused results"
+        )
+
+        return filtered_results
 
     def get_stats(self) -> dict:
         """Get collection statistics with detailed information"""
