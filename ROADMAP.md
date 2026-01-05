@@ -330,7 +330,7 @@ hnsw_config=HnswConfigDiff(
 
 - [x] Prometheus metrics endpoint (optional via ENABLE_PROMETHEUS_METRICS)
 - [x] Query analytics logging (retrieval_metrics.jsonl with /tmp fallback)
-- [ ] Feedback collection endpoint
+- [x] Feedback collection endpoint (`/api/feedback`, `/api/feedback/summary`)
 - [ ] Grafana dashboard
 
 ### Phase 4: Advanced Features (Month 2)

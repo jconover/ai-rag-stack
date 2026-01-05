@@ -86,3 +86,18 @@ class IngestResponse(BaseModel):
     status: str
     documents_processed: int
     chunks_created: int
+
+
+class FeedbackRequest(BaseModel):
+    """User feedback on a response"""
+    session_id: str = Field(..., description="Session ID for the conversation")
+    message_index: Optional[int] = Field(None, description="Index of the response in session (0-based)")
+    helpful: bool = Field(..., description="Whether the response was helpful (True=thumbs up, False=thumbs down)")
+    query_hash: Optional[str] = Field(None, description="Query hash for correlation with retrieval metrics")
+
+
+class FeedbackResponse(BaseModel):
+    """Response after submitting feedback"""
+    status: str = Field(..., description="Status of feedback submission")
+    feedback_id: str = Field(..., description="Unique ID for this feedback")
+    timestamp: str = Field(..., description="ISO timestamp when feedback was recorded")

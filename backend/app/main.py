@@ -13,12 +13,14 @@ import json
 from app.config import settings
 from app.models import (
     ChatRequest, ChatResponse, HealthResponse,
-    ModelsResponse, ModelInfo, StatsResponse
+    ModelsResponse, ModelInfo, StatsResponse,
+    FeedbackRequest, FeedbackResponse
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
 from app.templates import get_templates, get_template_by_id, get_categories
 from app.metrics import get_metrics_summary, ENABLE_PROMETHEUS
+from app.feedback import feedback_log, get_feedback_summary
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -365,6 +367,60 @@ async def get_retrieval_metrics(last_n: int = 100):
             "status": "ok",
             "metrics_enabled": True,
             "prometheus_enabled": ENABLE_PROMETHEUS,
+            "summary": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+async def submit_feedback(request: FeedbackRequest):
+    """Submit feedback on a response (thumbs up/down).
+
+    Logs user feedback to track response quality. Feedback can be correlated
+    with retrieval metrics using the query_hash field.
+
+    Args:
+        request: Feedback request with session_id, helpful flag, and optional metadata
+
+    Returns:
+        FeedbackResponse with feedback_id and timestamp
+    """
+    try:
+        entry = feedback_log.log_feedback(
+            session_id=request.session_id,
+            helpful=request.helpful,
+            message_index=request.message_index,
+            query_hash=request.query_hash
+        )
+
+        return FeedbackResponse(
+            status="saved",
+            feedback_id=entry.feedback_id,
+            timestamp=entry.timestamp
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/feedback/summary")
+async def get_feedback_stats(last_n: int = 100):
+    """Get summary of recent user feedback.
+
+    Returns aggregated statistics from the last N feedback entries,
+    including helpful rate and unique session count.
+
+    Args:
+        last_n: Number of recent entries to analyze (default 100)
+
+    Returns:
+        Summary statistics for feedback quality monitoring
+    """
+    try:
+        summary = get_feedback_summary(last_n=last_n)
+        return {
+            "status": "ok",
             "summary": summary
         }
     except Exception as e:
