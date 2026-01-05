@@ -141,6 +141,11 @@ score = alpha * (1/(k + rank_dense)) + (1-alpha) * (1/(k + rank_sparse))
 - `HYBRID_RRF_K=60` - RRF constant
 - `SPARSE_ENCODER_MODEL=Qdrant/bm25` - Sparse encoder model
 
+**Performance (128k chunks indexed):**
+- Retrieval: 15-80ms (semantic + keyword matching)
+- Reranking: ~280-350ms
+- Total E2E: <500ms before LLM generation
+
 #### 3. Semantic Chunking (Markdown-Aware)
 
 **Impact:** Preserves document structure | **Effort:** Medium
@@ -347,7 +352,7 @@ hnsw_config=HnswConfigDiff(
 
 ### Phase 4: Advanced Features (Month 2)
 
-- [x] Hybrid search (BM25 + vector) with RRF fusion
+- [x] Hybrid search (BM25 + vector) with RRF fusion - 15-80ms retrieval on 128k docs
 - [ ] PostgreSQL for analytics/metadata
 - [ ] Incremental ingestion with change detection
 - [ ] A/B testing framework
