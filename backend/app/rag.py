@@ -21,6 +21,7 @@ from app.vectorstore import vector_store
 from app.reranker import rerank_documents, get_reranker
 from app.metrics import retrieval_metrics_logger, RetrievalTimer, RetrievalMetrics
 from app.query_expansion import hyde_expander
+from app.web_search import web_searcher
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,13 @@ class RetrievalResult:
     hyde_used: bool = False
     hyde_time_ms: float = 0.0
     hyde_skipped_reason: Optional[str] = None
+    # Web search fallback fields
+    web_search_used: bool = False
+    web_search_time_ms: float = 0.0
+    web_search_results_count: int = 0
+    web_search_trigger_reason: Optional[str] = None
+    web_search_error: Optional[str] = None
+    web_search_context: str = ""  # Formatted web results for context
 
 
 class RAGPipeline:
@@ -55,22 +63,38 @@ class RAGPipeline:
         self.ollama_host = settings.ollama_host
         self.default_model = settings.ollama_default_model
     
-    def _format_context(self, documents: List) -> str:
-        """Format retrieved documents into context string"""
-        if not documents:
-            return ""
-        
+    def _format_context(self, documents: List, web_context: str = "") -> str:
+        """Format retrieved documents into context string.
+
+        Args:
+            documents: List of Document objects from vector store
+            web_context: Optional formatted web search results
+
+        Returns:
+            Combined context string for LLM
+        """
         context_parts = []
+
+        # Add local document context
         for i, doc in enumerate(documents, 1):
             source = doc.metadata.get('source', 'Unknown')
             source_type = doc.metadata.get('source_type', 'Unknown')
             content = doc.page_content.strip()
-            
+
             context_parts.append(
                 f"[Source {i} - {source_type}]\n{content}\n"
             )
-        
-        return "\n---\n".join(context_parts)
+
+        local_context = "\n---\n".join(context_parts) if context_parts else ""
+
+        # Add web search context if available
+        if web_context:
+            if local_context:
+                return f"{local_context}\n\n--- Web Search Results ---\n\n{web_context}"
+            else:
+                return f"--- Web Search Results ---\n\n{web_context}"
+
+        return local_context
     
     def _get_system_prompt(self) -> str:
         """Get the system prompt defining the assistant's role and behavior."""
@@ -242,6 +266,57 @@ Question: {query}"""
         result.documents = documents
         result.similarity_scores = similarity_scores
         result.final_count = len(documents)
+
+        # Phase 3: Web search fallback (if enabled and local results are poor)
+        if settings.web_search_enabled:
+            avg_score = (
+                sum(result.similarity_scores) / len(result.similarity_scores)
+                if result.similarity_scores else 0.0
+            )
+            max_score = max(result.similarity_scores) if result.similarity_scores else 0.0
+
+            should_search, reason = web_searcher.should_search(
+                avg_similarity_score=avg_score,
+                max_similarity_score=max_score,
+                result_count=result.final_count,
+            )
+
+            if should_search:
+                result.web_search_trigger_reason = reason
+                logger.info(f"Triggering web search fallback: {reason}")
+
+                # Run web search synchronously (we're already in a sync context)
+                import asyncio
+                try:
+                    # Get or create event loop for async call
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # We're in an async context, use run_in_executor pattern
+                            web_response = web_searcher.search_sync(query)
+                        else:
+                            web_response = loop.run_until_complete(web_searcher.search(query))
+                    except RuntimeError:
+                        web_response = web_searcher.search_sync(query)
+
+                    result.web_search_time_ms = web_response.search_time_ms
+                    result.web_search_used = web_response.triggered and not web_response.error
+
+                    if web_response.results:
+                        result.web_search_results_count = len(web_response.results)
+                        result.web_search_context = web_searcher.format_for_context(web_response.results)
+                        logger.info(
+                            f"Web search returned {len(web_response.results)} results "
+                            f"in {web_response.search_time_ms:.0f}ms"
+                        )
+                    elif web_response.error:
+                        result.web_search_error = web_response.error
+                        logger.warning(f"Web search error: {web_response.error}")
+
+                except Exception as e:
+                    result.web_search_error = str(e)
+                    logger.error(f"Web search fallback failed: {e}")
+
         result.total_time_ms = (time.perf_counter() - total_start) * 1000
 
         # Log metrics if enabled
@@ -375,6 +450,10 @@ Question: {query}"""
             'hybrid_search_used': result.hybrid_search_used,
             'hyde_used': result.hyde_used,
             'hyde_time_ms': round(result.hyde_time_ms, 2) if result.hyde_used else None,
+            'web_search_used': result.web_search_used,
+            'web_search_reason': result.web_search_trigger_reason,
+            'web_search_results': result.web_search_results_count if result.web_search_used else None,
+            'web_search_time_ms': round(result.web_search_time_ms, 2) if result.web_search_used else None,
         }
 
         # Calculate average scores
@@ -393,6 +472,8 @@ Question: {query}"""
             metrics['retrieval_error'] = result.retrieval_error
         if result.rerank_error:
             metrics['rerank_error'] = result.rerank_error
+        if result.web_search_error:
+            metrics['web_search_error'] = result.web_search_error
 
         return metrics
 
@@ -460,7 +541,10 @@ Question: {query}"""
         if use_rag:
             try:
                 retrieval_result = self._retrieve_with_scores(query, model)
-                context_str = self._format_context(retrieval_result.documents)
+                context_str = self._format_context(
+                    retrieval_result.documents,
+                    web_context=retrieval_result.web_search_context
+                )
             except Exception as e:
                 logger.error("Error retrieving context: %s", e)
 
@@ -484,7 +568,7 @@ Question: {query}"""
             result = {
                 'response': answer,
                 'model': model,
-                'context_used': bool(retrieval_result.documents),
+                'context_used': bool(retrieval_result.documents) or bool(retrieval_result.web_search_context),
                 'sources': (
                     self._format_sources_with_scores(retrieval_result)
                     if retrieval_result.documents else None
@@ -493,7 +577,7 @@ Question: {query}"""
             }
 
             # Include retrieval metrics if enabled
-            if settings.enable_retrieval_metrics and retrieval_result.documents:
+            if settings.enable_retrieval_metrics and (retrieval_result.documents or retrieval_result.web_search_used):
                 result['retrieval_metrics'] = self._build_retrieval_metrics_dict(retrieval_result)
 
             return result
@@ -590,7 +674,10 @@ Question: {query}"""
         if use_rag:
             try:
                 retrieval_result = self._retrieve_with_scores(query, model)
-                context_str = self._format_context(retrieval_result.documents)
+                context_str = self._format_context(
+                    retrieval_result.documents,
+                    web_context=retrieval_result.web_search_context
+                )
             except Exception as e:
                 logger.error("Error retrieving context: %s", e)
 
@@ -601,7 +688,7 @@ Question: {query}"""
         metadata = {
             'type': 'metadata',
             'model': model,
-            'context_used': bool(retrieval_result.documents),
+            'context_used': bool(retrieval_result.documents) or bool(retrieval_result.web_search_context),
             'sources': (
                 self._format_sources_with_scores(retrieval_result)
                 if retrieval_result.documents else None

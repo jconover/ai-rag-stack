@@ -84,6 +84,10 @@ services:
       - ENABLE_PROMETHEUS_METRICS=true
       - HYBRID_SEARCH_ENABLED=true
       - HYDE_ENABLED=true
+      - WEB_SEARCH_ENABLED=${WEB_SEARCH_ENABLED:-false}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4
+      - WEB_SEARCH_INCLUDE_DOMAINS=docs.aws.amazon.com,kubernetes.io,docs.docker.com,terraform.io
     depends_on:
       ollama:
         condition: service_healthy

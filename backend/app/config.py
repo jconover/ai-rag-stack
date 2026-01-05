@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     hyde_max_query_length: int = int(os.getenv("HYDE_MAX_QUERY_LENGTH", "500"))
     hyde_timeout_seconds: float = float(os.getenv("HYDE_TIMEOUT_SECONDS", "10.0"))
 
+    # Web Search Fallback (Tavily) - triggers when local retrieval scores are low
+    web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
+    web_search_api_key: str = os.getenv("TAVILY_API_KEY", "")
+    web_search_min_score_threshold: float = float(os.getenv("WEB_SEARCH_MIN_SCORE_THRESHOLD", "0.4"))
+    web_search_max_results: int = int(os.getenv("WEB_SEARCH_MAX_RESULTS", 5))
+    web_search_timeout_seconds: float = float(os.getenv("WEB_SEARCH_TIMEOUT_SECONDS", "10.0"))
+    web_search_include_domains: str = os.getenv("WEB_SEARCH_INCLUDE_DOMAINS", "")  # Comma-separated
+    web_search_exclude_domains: str = os.getenv("WEB_SEARCH_EXCLUDE_DOMAINS", "")  # Comma-separated
+
     # Metrics and logging
     enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
     log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"
