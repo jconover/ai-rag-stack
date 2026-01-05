@@ -157,20 +157,33 @@ headers_to_split = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split)
 ```
 
-#### 4. Query Expansion / HyDE
+#### 4. Query Expansion / HyDE ✅
 
-**Impact:** +15-25% recall | **Effort:** Medium
+**Impact:** +15-25% recall | **Effort:** Medium | **Status:** DONE
 
-```python
-def _expand_query(self, query: str, model: str) -> str:
-    """Generate hypothetical answer to improve retrieval"""
-    response = ollama.chat(
-        model=model,
-        messages=[{'role': 'user', 'content': f"Write a brief technical answer to: {query}"}],
-        options={'temperature': 0.3, 'num_predict': 150}
-    )
-    return f"{query}\n{response['message']['content']}"
-```
+Implementation uses Hypothetical Document Embeddings (HyDE) to generate synthetic
+documents for vague queries, improving semantic matching against document chunks.
+
+**Files:**
+- `backend/app/query_expansion.py` - HyDEExpander class with DevOps-focused prompts
+- `backend/app/config.py` - HyDE configuration settings
+- `backend/app/rag.py` - Integration into RAG pipeline
+
+**Features:**
+- Smart skip patterns for CLI commands, error messages, file paths
+- Configurable timeout and model selection
+- Metrics tracking (hyde_used, hyde_time_ms in response)
+
+**Configuration:**
+- `HYDE_ENABLED=true` - Enable HyDE query expansion
+- `HYDE_MODEL=llama3.1:8b` - Model for generating hypothetical documents
+- `HYDE_TEMPERATURE=0.3` - Lower = more focused generation
+- `HYDE_MAX_TOKENS=256` - Max length of hypothetical document
+- `HYDE_TIMEOUT_SECONDS=10.0` - Timeout for HyDE generation
+
+**Performance:**
+- Vague queries: ~2.2s HyDE generation + retrieval
+- Specific queries: HyDE skipped (instant, pattern-matched)
 
 #### 5. Upgrade Embedding Model
 
@@ -353,6 +366,7 @@ hnsw_config=HnswConfigDiff(
 ### Phase 4: Advanced Features (Month 2)
 
 - [x] Hybrid search (BM25 + vector) with RRF fusion - 15-80ms retrieval on 128k docs
+- [x] HyDE query expansion for vague queries (~2.2s generation, smart skip patterns)
 - [ ] PostgreSQL for analytics/metadata
 - [ ] Incremental ingestion with change detection
 - [ ] A/B testing framework
@@ -365,7 +379,7 @@ hnsw_config=HnswConfigDiff(
 1. **Semantic caching** - Cache responses for semantically similar queries
 2. **Auto-expanding documentation** - Detect query patterns with no good results → flag as content gaps
 3. **Model comparison mode** - A/B test different LLMs on same query
-4. **Query rewriting** - Use LLM to reformulate vague questions before retrieval
+4. ~~**Query rewriting**~~ - ✅ Implemented via HyDE query expansion
 5. **Source freshness tracking** - Show "last updated X days ago" for each source
 
 ---
