@@ -4,6 +4,7 @@ This module provides structured logging for user feedback (thumbs up/down)
 to track response quality and enable analytics.
 
 Log format: JSON lines for easy parsing and aggregation.
+Prometheus metrics: Optional counters for real-time monitoring.
 """
 
 import json
@@ -19,6 +20,49 @@ import os
 
 # Configure logger for feedback
 FEEDBACK_LOG_PATH = os.getenv("FEEDBACK_LOG_PATH", "/data/logs/user_feedback.jsonl")
+ENABLE_PROMETHEUS = os.getenv("ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
+
+# Prometheus metrics (initialized lazily)
+_helpful_counter = None
+_not_helpful_counter = None
+_feedback_total_counter = None
+
+
+def _init_prometheus_metrics():
+    """Initialize Prometheus metrics if enabled."""
+    global _helpful_counter, _not_helpful_counter, _feedback_total_counter
+
+    if not ENABLE_PROMETHEUS:
+        return
+
+    try:
+        from prometheus_client import Counter, REGISTRY
+
+        try:
+            _helpful_counter = Counter(
+                'rag_feedback_helpful_total',
+                'Total thumbs up feedback'
+            )
+            _not_helpful_counter = Counter(
+                'rag_feedback_not_helpful_total',
+                'Total thumbs down feedback'
+            )
+            _feedback_total_counter = Counter(
+                'rag_feedback_total',
+                'Total feedback submissions'
+            )
+        except ValueError:
+            # Metrics already registered
+            _helpful_counter = REGISTRY._names_to_collectors.get('rag_feedback_helpful_total')
+            _not_helpful_counter = REGISTRY._names_to_collectors.get('rag_feedback_not_helpful_total')
+            _feedback_total_counter = REGISTRY._names_to_collectors.get('rag_feedback_total')
+
+    except ImportError:
+        logging.warning("prometheus_client not installed. Prometheus metrics disabled.")
+
+
+# Initialize metrics on module load
+_init_prometheus_metrics()
 
 feedback_logger = logging.getLogger("user_feedback")
 feedback_logger.setLevel(logging.INFO)
@@ -99,6 +143,16 @@ class FeedbackLogger:
         )
 
         feedback_logger.info(entry.to_json())
+
+        # Record Prometheus metrics if enabled
+        if ENABLE_PROMETHEUS:
+            if _feedback_total_counter:
+                _feedback_total_counter.inc()
+            if helpful and _helpful_counter:
+                _helpful_counter.inc()
+            elif not helpful and _not_helpful_counter:
+                _not_helpful_counter.inc()
+
         return entry
 
 

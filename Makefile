@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -29,6 +29,8 @@ help:
 	@echo "aider-32b      - Start Aider with qwen2.5-coder:32b (powerful)"
 	@echo "aider-deepseek - Start Aider with deepseek-coder:6.7b"
 	@echo "aider-deepseek-33b - Start Aider with deepseek-coder:33b (most powerful)"
+	@echo "grafana        - Open Grafana dashboards in browser"
+	@echo "prometheus     - Open Prometheus UI in browser"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -51,6 +53,8 @@ start:
 	@echo "Frontend: http://localhost:3000"
 	@echo "Backend API: http://localhost:8000"
 	@echo "API Docs: http://localhost:8000/docs"
+	@echo "Grafana: http://localhost:3001 (admin/admin)"
+	@echo "Prometheus: http://localhost:9090"
 
 start-dev:
 	@echo "Starting all services in DEV mode (building locally)..."
@@ -61,6 +65,8 @@ start-dev:
 	@echo "Frontend: http://localhost:3000"
 	@echo "Backend API: http://localhost:8000"
 	@echo "API Docs: http://localhost:8000/docs"
+	@echo "Grafana: http://localhost:3001 (admin/admin)"
+	@echo "Prometheus: http://localhost:9090"
 
 stop:
 	docker compose down
@@ -165,6 +171,14 @@ aider-deepseek:
 aider-deepseek-33b:
 	@echo "Starting Aider with deepseek-coder:33b (most powerful)..."
 	@OLLAMA_API_BASE=http://localhost:11434 aider --config .aider.deepseek-33b.conf.yml
+
+grafana:
+	@echo "Opening Grafana dashboards..."
+	@xdg-open http://localhost:3001 2>/dev/null || open http://localhost:3001 2>/dev/null || echo "Open http://localhost:3001 in your browser (login: admin/admin)"
+
+prometheus:
+	@echo "Opening Prometheus UI..."
+	@xdg-open http://localhost:9090 2>/dev/null || open http://localhost:9090 2>/dev/null || echo "Open http://localhost:9090 in your browser"
 
 clean:
 	docker compose down -v
