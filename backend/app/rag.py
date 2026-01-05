@@ -285,19 +285,9 @@ Question: {query}"""
                 result.web_search_trigger_reason = reason
                 logger.info(f"Triggering web search fallback: {reason}")
 
-                # Run web search synchronously (we're already in a sync context)
-                import asyncio
                 try:
-                    # Get or create event loop for async call
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            # We're in an async context, use run_in_executor pattern
-                            web_response = web_searcher.search_sync(query)
-                        else:
-                            web_response = loop.run_until_complete(web_searcher.search(query))
-                    except RuntimeError:
-                        web_response = web_searcher.search_sync(query)
+                    # Use synchronous search (httpx.Client, safe in any context)
+                    web_response = web_searcher.search_sync(query)
 
                     result.web_search_time_ms = web_response.search_time_ms
                     result.web_search_used = web_response.triggered and not web_response.error

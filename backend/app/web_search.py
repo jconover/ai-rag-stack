@@ -224,19 +224,74 @@ class TavilySearcher:
         include_domains: Optional[List[str]] = None,
         exclude_domains: Optional[List[str]] = None,
         search_depth: str = "basic",
+        include_raw_content: bool = False,
     ) -> WebSearchResponse:
-        """Synchronous wrapper for search.
+        """Synchronous version of search using httpx.Client.
 
-        Use this when not in an async context.
+        Use this when in a sync context or when called from within an async event loop.
         """
-        return asyncio.run(
-            self.search(
-                query=query,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-                search_depth=search_depth,
+        response = WebSearchResponse(query=query, triggered=True)
+
+        if not self.enabled:
+            response.error = "Web search not enabled or API key not configured"
+            response.triggered = False
+            return response
+
+        start_time = time.perf_counter()
+
+        # Merge instance domains with call-specific domains
+        final_include = include_domains or self._include_domains
+        final_exclude = exclude_domains or self._exclude_domains
+
+        payload: Dict[str, Any] = {
+            "api_key": self.api_key,
+            "query": query,
+            "search_depth": search_depth,
+            "max_results": self.max_results,
+            "include_raw_content": include_raw_content,
+        }
+
+        if final_include:
+            payload["include_domains"] = final_include
+        if final_exclude:
+            payload["exclude_domains"] = final_exclude
+
+        try:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
+                http_response = client.post(TAVILY_API_URL, json=payload)
+                http_response.raise_for_status()
+                data = http_response.json()
+
+            # Parse results
+            for item in data.get("results", []):
+                result = WebSearchResult(
+                    title=item.get("title", ""),
+                    url=item.get("url", ""),
+                    content=item.get("content", ""),
+                    score=item.get("score", 0.0),
+                    raw_content=item.get("raw_content") if include_raw_content else None,
+                )
+                response.results.append(result)
+
+            logger.info(
+                f"Tavily search completed: query='{query[:50]}...' "
+                f"results={len(response.results)} time={time.perf_counter() - start_time:.2f}s"
             )
-        )
+
+        except httpx.TimeoutException:
+            response.error = f"Tavily search timed out after {self.timeout_seconds}s"
+            logger.warning(response.error)
+
+        except httpx.HTTPStatusError as e:
+            response.error = f"Tavily API error: {e.response.status_code} - {e.response.text[:200]}"
+            logger.error(response.error)
+
+        except Exception as e:
+            response.error = f"Web search failed: {str(e)}"
+            logger.error(response.error)
+
+        response.search_time_ms = (time.perf_counter() - start_time) * 1000
+        return response
 
     def format_for_context(
         self,
