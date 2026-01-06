@@ -4,12 +4,16 @@ This module defines the database schema for:
 - QueryLog: Chat query history with metrics and metadata
 - Feedback: User feedback on AI responses
 - IngestionRegistry: Track ingested documents for incremental updates
+- Experiment: A/B testing experiment configuration
+- ExperimentAssignment: User assignments to experiment variants
+- ExperimentResult: Metrics collected from experiment variants
 
 Tables use proper indexing for common query patterns:
 - Date range queries for analytics
 - Session-based lookups
 - Model filtering
 - File path lookups for ingestion tracking
+- Experiment variant analysis
 """
 
 import uuid
@@ -24,12 +28,32 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Index,
+    ForeignKey,
+    Enum as SQLEnum,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+import enum
 
 from app.database import Base
+
+
+# Enums for A/B testing
+class ExperimentType(enum.Enum):
+    """Types of A/B testing experiments."""
+    MODEL = "model"
+    PROMPT = "prompt"
+    RAG_CONFIG = "rag_config"
+    TEMPERATURE = "temperature"
+
+
+class ExperimentStatus(enum.Enum):
+    """Lifecycle status of an experiment."""
+    DRAFT = "draft"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
 
 
 class QueryLog(Base):
@@ -409,3 +433,272 @@ class IngestionRegistry(Base):
 
     def __repr__(self) -> str:
         return f"<IngestionRegistry(path={self.file_path[:50]}..., source={self.source_type}, chunks={self.chunk_count})>"
+
+
+class Experiment(Base):
+    """A/B testing experiment configuration.
+
+    Defines experiments to compare different configurations:
+    - Model variants (llama3.1:8b vs mistral:7b)
+    - Prompt templates
+    - RAG configuration parameters
+    - Temperature settings
+
+    Variants and traffic splits are stored as JSONB for flexibility.
+    """
+
+    __tablename__ = "experiments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique experiment identifier",
+    )
+
+    # Experiment identification
+    name: Mapped[str] = mapped_column(
+        String(200),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="Unique experiment name",
+    )
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Detailed description of experiment hypothesis and goals",
+    )
+
+    # Experiment configuration
+    experiment_type: Mapped[ExperimentType] = mapped_column(
+        SQLEnum(ExperimentType, name="experiment_type_enum", create_type=True),
+        nullable=False,
+        index=True,
+        comment="Type of experiment: model, prompt, rag_config, temperature",
+    )
+    status: Mapped[ExperimentStatus] = mapped_column(
+        SQLEnum(ExperimentStatus, name="experiment_status_enum", create_type=True),
+        nullable=False,
+        default=ExperimentStatus.DRAFT,
+        index=True,
+        comment="Experiment lifecycle status: draft, running, paused, completed",
+    )
+
+    # Variant configuration as JSONB
+    variants: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="List of variant configs, e.g., [{id: 'control', model: 'llama3.1:8b'}, {id: 'treatment', model: 'mistral:7b'}]",
+    )
+    traffic_split: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="Percentage allocation per variant, e.g., {control: 50, treatment: 50}",
+    )
+
+    # Success criteria
+    success_metric: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="Primary metric to measure: rating, latency, relevance, etc.",
+    )
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="Experiment creation timestamp",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        comment="Last update timestamp",
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When experiment started running",
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When experiment ended",
+    )
+
+    # Relationships
+    assignments: Mapped[List["ExperimentAssignment"]] = relationship(
+        "ExperimentAssignment",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+    )
+    results: Mapped[List["ExperimentResult"]] = relationship(
+        "ExperimentResult",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+    )
+
+    # Composite indexes
+    __table_args__ = (
+        Index("ix_experiments_status_created", "status", "created_at"),
+        Index("ix_experiments_type_status", "experiment_type", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Experiment(id={self.id}, name={self.name}, status={self.status.value})>"
+
+
+class ExperimentAssignment(Base):
+    """Assignment of sessions to experiment variants.
+
+    Tracks which variant each session is assigned to for consistent
+    experience throughout the session and for analytics attribution.
+    """
+
+    __tablename__ = "experiment_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique assignment identifier",
+    )
+
+    # Foreign key to experiment
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to the experiment",
+    )
+
+    # Assignment details
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+        index=True,
+        comment="Session ID assigned to this variant",
+    )
+    variant_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="Variant identifier from experiment.variants",
+    )
+
+    # Timestamp
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="When the assignment was made",
+    )
+
+    # Relationship back to experiment
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment",
+        back_populates="assignments",
+    )
+
+    # Composite indexes for lookups
+    __table_args__ = (
+        Index("ix_exp_assign_experiment_session", "experiment_id", "session_id", unique=True),
+        Index("ix_exp_assign_experiment_variant", "experiment_id", "variant_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ExperimentAssignment(experiment={self.experiment_id}, session={self.session_id[:8]}..., variant={self.variant_id})>"
+
+
+class ExperimentResult(Base):
+    """Metrics collected from experiment variants.
+
+    Stores individual metric observations for statistical analysis.
+    Supports multiple metric types per experiment for comprehensive
+    analysis (latency, ratings, relevance scores, etc.).
+    """
+
+    __tablename__ = "experiment_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique result identifier",
+    )
+
+    # Foreign key to experiment
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to the experiment",
+    )
+
+    # Variant and session tracking
+    variant_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="Variant identifier for this result",
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+        index=True,
+        comment="Session that generated this result",
+    )
+
+    # Optional link to specific query
+    query_log_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("query_logs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Reference to specific query if applicable",
+    )
+
+    # Metric data
+    metric_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="Name of the metric: latency, rating, relevance, etc.",
+    )
+    metric_value: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Numeric value of the metric",
+    )
+
+    # Timestamp
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="When this result was recorded",
+    )
+
+    # Relationship back to experiment
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment",
+        back_populates="results",
+    )
+
+    # Composite indexes for analytics queries
+    __table_args__ = (
+        Index("ix_exp_results_experiment_variant", "experiment_id", "variant_id"),
+        Index("ix_exp_results_experiment_metric", "experiment_id", "metric_name"),
+        Index("ix_exp_results_variant_recorded", "variant_id", "recorded_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ExperimentResult(experiment={self.experiment_id}, variant={self.variant_id}, metric={self.metric_name}={self.metric_value})>"

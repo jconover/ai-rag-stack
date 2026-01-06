@@ -475,7 +475,7 @@ hnsw_config=HnswConfigDiff(
 - [x] Redis embedding cache (MD5 hash keys, 1-hour TTL, 30-50% latency reduction)
 - [x] Embedding model upgrade (BAAI/bge-base-en-v1.5, 768 dims, +10-15% retrieval quality)
 - [x] PostgreSQL for analytics/metadata (query logs, feedback, ingestion registry)
-- [ ] A/B testing framework
+- [x] A/B testing framework (experiments, variant assignment, statistical significance)
 - [ ] User accounts & persistent sessions
 
 ---
@@ -484,9 +484,54 @@ hnsw_config=HnswConfigDiff(
 
 1. **Semantic caching** - Cache responses for semantically similar queries
 2. **Auto-expanding documentation** - Detect query patterns with no good results → flag as content gaps
-3. **Model comparison mode** - A/B test different LLMs on same query
+3. ~~**Model comparison mode**~~ - ✅ Implemented via A/B testing framework
 4. ~~**Query rewriting**~~ - ✅ Implemented via HyDE query expansion
 5. **Source freshness tracking** - Show "last updated X days ago" for each source
+
+---
+
+## A/B Testing Framework ✅
+
+**Status:** DONE
+
+**Files Created:**
+- `backend/app/ab_testing.py` - ABTestingService with statistical analysis
+
+**Files Modified:**
+- `backend/app/db_models.py` - Experiment, ExperimentAssignment, ExperimentResult models
+- `backend/app/models.py` - Pydantic models for API requests/responses
+- `backend/app/main.py` - A/B testing endpoints and chat integration
+- `backend/app/config.py` - A/B testing configuration
+
+**API Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/experiments` | POST | Create new experiment |
+| `/api/experiments` | GET | List experiments (with status/type filters) |
+| `/api/experiments/{id}` | GET | Get experiment details |
+| `/api/experiments/{id}` | PUT | Update experiment status/config |
+| `/api/experiments/{id}` | DELETE | Delete experiment |
+| `/api/experiments/{id}/stats` | GET | Get statistics with p-values |
+| `/api/experiments/{id}/record` | POST | Record a metric result |
+| `/api/experiments/assignment` | GET | Get variant for session |
+
+**Experiment Types:**
+- `model` - Compare different LLM models
+- `prompt` - Test prompt variations
+- `rag_config` - Test RAG settings (top_k, reranker, etc.)
+- `temperature` - Test temperature settings
+
+**Features:**
+- Sticky session assignment (consistent variant per session)
+- Traffic split configuration (e.g., 50/50, 90/10)
+- Automatic latency metric recording
+- Welch's t-test for statistical significance
+- 95% confidence intervals
+
+**Configuration:**
+- `AB_TESTING_ENABLED=true` - Master toggle
+- `AB_TESTING_AUTO_RECORD_METRICS=true` - Auto-record latency
+- `AB_TESTING_DEFAULT_EXPERIMENT=` - Default experiment ID
 
 ---
 

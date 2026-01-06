@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # Query logging - enable/disable PostgreSQL query logging
     query_logging_enabled: bool = os.getenv("QUERY_LOGGING_ENABLED", "true").lower() == "true"
 
+    # A/B Testing Configuration
+    ab_testing_enabled: bool = os.getenv("AB_TESTING_ENABLED", "true").lower() == "true"
+    ab_testing_auto_record_metrics: bool = os.getenv("AB_TESTING_AUTO_RECORD_METRICS", "true").lower() == "true"
+    ab_testing_default_experiment: str | None = os.getenv("AB_TESTING_DEFAULT_EXPERIMENT") or None
+
     @property
     def postgres_url(self) -> str:
         """Construct PostgreSQL async connection URL for asyncpg driver"""

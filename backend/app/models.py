@@ -193,3 +193,164 @@ class QueryLogsFilter(BaseModel):
     web_search_used: Optional[bool] = Field(None, description="Filter by web search usage")
     page: int = Field(1, ge=1, description="Page number (1-indexed)")
     page_size: int = Field(50, ge=1, le=500, description="Records per page")
+
+
+# =====================
+# A/B Testing Models
+# =====================
+
+class ExperimentVariant(BaseModel):
+    """Configuration for an experiment variant"""
+    name: str = Field(..., description="Variant name (e.g., 'control', 'treatment_a')")
+    weight: float = Field(1.0, ge=0.0, le=1.0, description="Traffic weight for this variant (0.0-1.0)")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Variant-specific configuration (model, temperature, etc.)")
+
+
+class ExperimentCreate(BaseModel):
+    """Request to create a new A/B experiment"""
+    name: str = Field(..., min_length=1, max_length=200, description="Experiment name")
+    description: Optional[str] = Field(None, description="Experiment description and hypothesis")
+    experiment_type: str = Field(
+        "model",
+        description="Type of experiment: 'model' (LLM model), 'config' (RAG config), 'prompt' (prompt template)"
+    )
+    variants: List[ExperimentVariant] = Field(
+        ...,
+        min_length=2,
+        description="List of variants (minimum 2: control and at least one treatment)"
+    )
+    traffic_percentage: float = Field(
+        100.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentage of total traffic to include in experiment (0-100)"
+    )
+    start_at: Optional[str] = Field(None, description="Scheduled start time (ISO format)")
+    end_at: Optional[str] = Field(None, description="Scheduled end time (ISO format)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class ExperimentUpdate(BaseModel):
+    """Request to update an existing experiment"""
+    name: Optional[str] = Field(None, min_length=1, max_length=200, description="Updated experiment name")
+    description: Optional[str] = Field(None, description="Updated description")
+    status: Optional[str] = Field(
+        None,
+        description="New status: 'draft', 'running', 'paused', 'completed', 'archived'"
+    )
+    variants: Optional[List[ExperimentVariant]] = Field(
+        None,
+        description="Updated variants (cannot change while running)"
+    )
+    traffic_percentage: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description="Updated traffic percentage"
+    )
+    end_at: Optional[str] = Field(None, description="Updated end time (ISO format)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Updated metadata")
+
+
+class ExperimentResponse(BaseModel):
+    """Response with experiment details"""
+    id: str = Field(..., description="Unique experiment identifier")
+    name: str = Field(..., description="Experiment name")
+    description: Optional[str] = Field(None, description="Experiment description")
+    experiment_type: str = Field(..., description="Type of experiment")
+    status: str = Field(..., description="Current status: draft, running, paused, completed, archived")
+    variants: List[ExperimentVariant] = Field(..., description="Experiment variants")
+    traffic_percentage: float = Field(..., description="Traffic percentage in experiment")
+    created_at: str = Field(..., description="Creation timestamp (ISO format)")
+    updated_at: str = Field(..., description="Last update timestamp (ISO format)")
+    start_at: Optional[str] = Field(None, description="Scheduled start time")
+    end_at: Optional[str] = Field(None, description="Scheduled end time")
+    started_at: Optional[str] = Field(None, description="Actual start time")
+    ended_at: Optional[str] = Field(None, description="Actual end time")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+
+class ExperimentListResponse(BaseModel):
+    """Response for listing experiments"""
+    total: int = Field(..., description="Total number of experiments")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Records per page")
+    experiments: List[ExperimentResponse] = Field(..., description="List of experiments")
+
+
+class VariantStats(BaseModel):
+    """Statistics for a single variant"""
+    variant_name: str = Field(..., description="Variant name")
+    sample_size: int = Field(..., description="Number of observations")
+    conversions: int = Field(0, description="Number of conversions (positive outcomes)")
+    conversion_rate: Optional[float] = Field(None, description="Conversion rate (conversions/sample_size)")
+    avg_latency_ms: Optional[float] = Field(None, description="Average latency in milliseconds")
+    p50_latency_ms: Optional[float] = Field(None, description="50th percentile latency")
+    p95_latency_ms: Optional[float] = Field(None, description="95th percentile latency")
+    avg_metric_value: Optional[float] = Field(None, description="Average primary metric value")
+    std_metric_value: Optional[float] = Field(None, description="Standard deviation of metric")
+    positive_feedback: int = Field(0, description="Thumbs up count")
+    negative_feedback: int = Field(0, description="Thumbs down count")
+    feedback_rate: Optional[float] = Field(None, description="Positive feedback rate")
+
+
+class StatisticalSignificance(BaseModel):
+    """Statistical significance testing results"""
+    control_variant: str = Field(..., description="Name of control variant")
+    treatment_variant: str = Field(..., description="Name of treatment variant")
+    metric_name: str = Field(..., description="Metric being compared")
+    control_mean: float = Field(..., description="Control group mean")
+    treatment_mean: float = Field(..., description="Treatment group mean")
+    relative_difference: float = Field(..., description="Relative difference ((treatment-control)/control)")
+    p_value: Optional[float] = Field(None, description="P-value from statistical test")
+    confidence_interval_lower: Optional[float] = Field(None, description="95% CI lower bound")
+    confidence_interval_upper: Optional[float] = Field(None, description="95% CI upper bound")
+    is_significant: bool = Field(False, description="Whether result is statistically significant (p < 0.05)")
+    test_type: str = Field("t-test", description="Statistical test used")
+    sample_size_adequate: bool = Field(False, description="Whether sample size is adequate for reliable results")
+    minimum_detectable_effect: Optional[float] = Field(None, description="MDE with current sample size")
+
+
+class ExperimentStatsResponse(BaseModel):
+    """Response with experiment statistics and significance"""
+    experiment_id: str = Field(..., description="Experiment identifier")
+    experiment_name: str = Field(..., description="Experiment name")
+    status: str = Field(..., description="Current experiment status")
+    duration_hours: Optional[float] = Field(None, description="Experiment duration in hours")
+    total_observations: int = Field(..., description="Total observations across all variants")
+    variant_stats: List[VariantStats] = Field(..., description="Per-variant statistics")
+    significance_tests: List[StatisticalSignificance] = Field(
+        default_factory=list,
+        description="Statistical significance tests between variants"
+    )
+    winning_variant: Optional[str] = Field(None, description="Variant with best performance (if significant)")
+    recommendation: Optional[str] = Field(None, description="Action recommendation based on results")
+    computed_at: str = Field(..., description="When statistics were computed (ISO format)")
+
+
+class VariantAssignmentResponse(BaseModel):
+    """Response with variant assignment for a session"""
+    experiment_id: str = Field(..., description="Experiment identifier")
+    experiment_name: str = Field(..., description="Experiment name")
+    variant_name: str = Field(..., description="Assigned variant name")
+    variant_config: Dict[str, Any] = Field(..., description="Configuration to apply for this variant")
+    session_id: str = Field(..., description="Session identifier used for assignment")
+    is_control: bool = Field(False, description="Whether this is the control variant")
+
+
+class ExperimentResultRecord(BaseModel):
+    """Request to record a result/metric for an experiment"""
+    session_id: str = Field(..., description="Session identifier")
+    variant_name: str = Field(..., description="Variant the session was assigned to")
+    metric_name: str = Field("latency_ms", description="Name of the metric being recorded")
+    metric_value: float = Field(..., description="Metric value")
+    is_conversion: bool = Field(False, description="Whether this is a conversion event")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional result metadata")
+
+
+class ExperimentResultResponse(BaseModel):
+    """Response after recording an experiment result"""
+    id: str = Field(..., description="Result record identifier")
+    experiment_id: str = Field(..., description="Experiment identifier")
+    variant_name: str = Field(..., description="Variant name")
+    recorded_at: str = Field(..., description="Recording timestamp (ISO format)")
