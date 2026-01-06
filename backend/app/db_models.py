@@ -1,6 +1,9 @@
 """SQLAlchemy ORM models for PostgreSQL persistence.
 
 This module defines the database schema for:
+- User: User accounts with authentication
+- UserSession: User session management for web authentication
+- APIKey: Programmatic API access keys
 - QueryLog: Chat query history with metrics and metadata
 - Feedback: User feedback on AI responses
 - IngestionRegistry: Track ingested documents for incremental updates
@@ -14,6 +17,7 @@ Tables use proper indexing for common query patterns:
 - Model filtering
 - File path lookups for ingestion tracking
 - Experiment variant analysis
+- User authentication and authorization
 """
 
 import uuid
@@ -56,6 +60,294 @@ class ExperimentStatus(enum.Enum):
     COMPLETED = "completed"
 
 
+# =============================================================================
+# User Account Models
+# =============================================================================
+
+
+class User(Base):
+    """User account for authentication and authorization.
+
+    Stores user credentials and profile information. Passwords are stored
+    as bcrypt hashes. Supports email verification and account activation.
+
+    Related models:
+    - UserSession: Active login sessions
+    - APIKey: Programmatic API access keys
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique user identifier",
+    )
+
+    # Authentication credentials
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="User email address (unique, used for login)",
+    )
+    username: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="User display name (unique)",
+    )
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="Bcrypt hashed password",
+    )
+
+    # Account status
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+        comment="Whether the account is active (can login)",
+    )
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+        comment="Whether the email has been verified",
+    )
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="Account creation timestamp",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        comment="Last account update timestamp",
+    )
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Last successful login timestamp",
+    )
+
+    # Relationships
+    sessions: Mapped[List["UserSession"]] = relationship(
+        "UserSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    api_keys: Mapped[List["APIKey"]] = relationship(
+        "APIKey",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        Index("ix_users_active_verified", "is_active", "is_verified"),
+        Index("ix_users_email_active", "email", "is_active"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, username={self.username}, email={self.email})>"
+
+
+class UserSession(Base):
+    """User session for web authentication.
+
+    Tracks active login sessions with hashed tokens. Supports tracking
+    of client information (IP, user agent) for security auditing.
+
+    Session tokens should be generated securely and hashed before storage.
+    The actual token is returned to the client only once at creation.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique session identifier",
+    )
+
+    # Foreign key to user
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to the user who owns this session",
+    )
+
+    # Session token (hashed)
+    token_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="SHA-256 hash of the session token",
+    )
+
+    # Session lifecycle
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        comment="Session expiration timestamp",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Session creation timestamp",
+    )
+
+    # Client information for security auditing
+    ip_address: Mapped[Optional[str]] = mapped_column(
+        String(45),  # Supports IPv6 addresses
+        nullable=True,
+        comment="Client IP address at session creation",
+    )
+    user_agent: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Client user agent string",
+    )
+
+    # Relationship back to user
+    user: Mapped["User"] = relationship(
+        "User",
+        back_populates="sessions",
+    )
+
+    # Composite indexes for session management
+    __table_args__ = (
+        Index("ix_user_sessions_user_expires", "user_id", "expires_at"),
+        Index("ix_user_sessions_token_expires", "token_hash", "expires_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserSession(id={self.id}, user_id={self.user_id}, expires_at={self.expires_at})>"
+
+
+class APIKey(Base):
+    """API key for programmatic access.
+
+    Allows users to create API keys for automated/programmatic access
+    to the system. Keys have:
+    - Hashed storage (original key shown only once at creation)
+    - Optional expiration
+    - Granular permissions via JSONB
+    - Usage tracking
+
+    Permissions are stored as JSONB for flexibility, e.g.:
+    {"actions": ["chat", "upload"], "rate_limit": 1000}
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="Unique API key identifier",
+    )
+
+    # Foreign key to user
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to the user who owns this API key",
+    )
+
+    # Key identification and storage
+    key_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="SHA-256 hash of the API key",
+    )
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="User-friendly name for the API key",
+    )
+
+    # Permissions as JSONB for flexibility
+    permissions: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="JSONB with allowed actions and constraints, e.g., {actions: ['chat', 'upload'], rate_limit: 1000}",
+    )
+
+    # Lifecycle management
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Optional expiration timestamp (null = never expires)",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="API key creation timestamp",
+    )
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Last time this API key was used",
+    )
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+        comment="Whether the API key is active (can be used)",
+    )
+
+    # Relationship back to user
+    user: Mapped["User"] = relationship(
+        "User",
+        back_populates="api_keys",
+    )
+
+    # Composite indexes for API key management
+    __table_args__ = (
+        Index("ix_api_keys_user_active", "user_id", "is_active"),
+        Index("ix_api_keys_hash_active", "key_hash", "is_active"),
+        Index("ix_api_keys_user_name", "user_id", "name", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<APIKey(id={self.id}, user_id={self.user_id}, name={self.name}, is_active={self.is_active})>"
+
+
+# =============================================================================
+# Query and Feedback Models
+# =============================================================================
+
+
 class QueryLog(Base):
     """Log of all chat queries for analytics and debugging.
 
@@ -82,6 +374,12 @@ class QueryLog(Base):
         nullable=False,
         index=True,
         comment="Session ID for conversation grouping",
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment="User ID if authenticated (optional)",
     )
     query: Mapped[str] = mapped_column(
         Text,

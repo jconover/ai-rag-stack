@@ -476,7 +476,7 @@ hnsw_config=HnswConfigDiff(
 - [x] Embedding model upgrade (BAAI/bge-base-en-v1.5, 768 dims, +10-15% retrieval quality)
 - [x] PostgreSQL for analytics/metadata (query logs, feedback, ingestion registry)
 - [x] A/B testing framework (experiments, variant assignment, statistical significance)
-- [ ] User accounts & persistent sessions
+- [x] User accounts & persistent sessions (registration, login, API keys)
 
 ---
 
@@ -532,6 +532,47 @@ hnsw_config=HnswConfigDiff(
 - `AB_TESTING_ENABLED=true` - Master toggle
 - `AB_TESTING_AUTO_RECORD_METRICS=true` - Auto-record latency
 - `AB_TESTING_DEFAULT_EXPERIMENT=` - Default experiment ID
+
+---
+
+## User Accounts & Authentication ✅
+
+**Status:** DONE
+
+**Files Created:**
+- `backend/app/auth.py` - AuthService with password hashing, session management, API keys
+
+**Files Modified:**
+- `backend/app/db_models.py` - User, UserSession, APIKey models
+- `backend/app/models.py` - Pydantic models for auth requests/responses
+- `backend/app/main.py` - Auth endpoints and optional auth on chat
+- `backend/app/config.py` - Auth configuration settings
+- `backend/requirements.txt` - bcrypt, python-jose, passlib
+
+**API Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/register` | POST | Create new user account |
+| `/api/auth/login` | POST | Authenticate, get session token |
+| `/api/auth/logout` | POST | Invalidate session |
+| `/api/auth/me` | GET | Get current user info |
+| `/api/auth/me` | PUT | Update user profile |
+| `/api/auth/api-keys` | POST | Create API key |
+| `/api/auth/api-keys` | GET | List user's API keys |
+| `/api/auth/api-keys/{id}` | DELETE | Revoke API key |
+
+**Features:**
+- bcrypt password hashing (cost factor 12)
+- Session tokens (24-hour default expiry)
+- API keys with "rag_" prefix
+- Optional auth on `/api/chat` (associates queries with user)
+- Permissions support for API keys
+
+**Configuration:**
+- `AUTH_ENABLED=false` - Master toggle (disabled by default)
+- `SESSION_EXPIRE_HOURS=24` - Session lifetime
+- `API_KEY_PREFIX=rag_` - API key prefix
+- `REQUIRE_EMAIL_VERIFICATION=false` - Email verification toggle
 
 ---
 

@@ -4,11 +4,11 @@ import os
 import subprocess
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,9 @@ from app.models import (
     VariantAssignmentResponse, ExperimentResultRecord,
     ExperimentResultResponse, ExperimentVariant,
     VariantStats, StatisticalSignificance,
+    # Authentication models
+    UserCreate, UserLogin, UserResponse, UserUpdate,
+    TokenResponse, APIKeyCreate, APIKeyResponse,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
@@ -44,6 +47,12 @@ from app.db_models import (
     QueryLog, Feedback,
     Experiment, ExperimentAssignment, ExperimentResult,
     ExperimentStatus, ExperimentType,
+    User, UserSession, APIKey,
+)
+from app.auth import (
+    auth_service, hash_password, verify_password,
+    generate_api_key, hash_token,
+    get_current_user, get_optional_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,7 +179,8 @@ async def log_query_to_postgres(
     query: str,
     model: str,
     result: dict,
-    total_time_ms: float
+    total_time_ms: float,
+    user_id: Optional[str] = None,
 ) -> None:
     """Log a chat query to PostgreSQL for analytics.
 
@@ -183,6 +193,7 @@ async def log_query_to_postgres(
         model: LLM model used
         result: Response result dictionary
         total_time_ms: Total request latency in milliseconds
+        user_id: Optional authenticated user ID
     """
     try:
         async with get_db_context() as db:
@@ -208,6 +219,7 @@ async def log_query_to_postgres(
             # Create query log entry
             query_log = QueryLog(
                 session_id=session_id,
+                user_id=uuid.UUID(user_id) if user_id else None,
                 query=query,
                 model=model,
                 response_length=len(result.get('response', '')),
@@ -349,11 +361,22 @@ async def health_check():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """Chat with the AI assistant"""
+async def chat(
+    request: ChatRequest,
+    req: Request,
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Chat with the AI assistant.
+
+    Optionally authenticates the user to associate queries with their account.
+    Works with or without authentication.
+    """
 
     # Generate or use provided session ID
     session_id = request.session_id or str(uuid.uuid4())
+
+    # Track user_id for authenticated requests
+    user_id = str(current_user.id) if current_user else None
 
     # Save user message
     save_message(session_id, "user", request.message)
@@ -406,6 +429,7 @@ async def chat(request: ChatRequest):
                 model=result['model'],
                 result=result,
                 total_time_ms=total_time_ms,
+                user_id=user_id,
             )
 
         # Record experiment metrics if in an active experiment
@@ -1917,6 +1941,437 @@ async def record_experiment_metrics(
 
     except Exception as e:
         logger.warning(f"Failed to record experiment metrics: {e}")
+
+
+# =====================
+# Authentication Endpoints
+# =====================
+
+@app.post("/api/auth/register", response_model=UserResponse, status_code=201)
+async def register_user(
+    request: UserCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new user account.
+
+    Creates a new user with the provided email, username, and password.
+    Password is hashed using bcrypt before storage.
+
+    Args:
+        request: UserCreate with email, username, and password
+        db: Database session
+
+    Returns:
+        UserResponse with created user details (no password)
+
+    Raises:
+        HTTPException: 400 if email/username already exists
+        HTTPException: 503 if auth is disabled
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable."
+        )
+
+    try:
+        user = await auth_service.register_user(
+            db=db,
+            email=request.email,
+            username=request.username,
+            password=request.password,
+        )
+        await db.commit()
+
+        return UserResponse(
+            id=str(user.id),
+            email=user.email,
+            username=user.username,
+            is_active=user.is_active,
+            created_at=user.created_at.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to register user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login_user(
+    request: UserLogin,
+    req: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticate user and create session.
+
+    Validates credentials and creates a new session token.
+    Supports login with either email or username.
+
+    Args:
+        request: UserLogin with email_or_username and password
+        req: FastAPI Request object for client info
+        db: Database session
+
+    Returns:
+        TokenResponse with session token and expiration
+
+    Raises:
+        HTTPException: 401 if credentials are invalid
+        HTTPException: 503 if auth is disabled
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable."
+        )
+
+    try:
+        # Authenticate user
+        user = await auth_service.authenticate(
+            db=db,
+            email_or_username=request.email_or_username,
+            password=request.password,
+        )
+
+        # Get client info
+        client_ip = req.client.host if req.client else None
+        user_agent = req.headers.get("user-agent")
+
+        # Create session
+        token = await auth_service.create_session(
+            db=db,
+            user_id=user.id,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            duration_hours=settings.session_expire_hours,
+        )
+        await db.commit()
+
+        # Calculate expiration
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.session_expire_hours)
+
+        return TokenResponse(
+            access_token=token,
+            token_type="bearer",
+            expires_at=expires_at.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to login user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/logout", status_code=204)
+async def logout_user(
+    authorization: str = Header(..., description="Bearer token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Logout and invalidate session.
+
+    Invalidates the current session token.
+
+    Args:
+        authorization: Bearer token header
+        db: Database session
+
+    Returns:
+        204 No Content on success
+
+    Raises:
+        HTTPException: 401 if not authenticated
+    """
+    if not settings.auth_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication is not enabled"
+        )
+
+    # Extract token from header
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization format"
+        )
+
+    # Invalidate session
+    success = await auth_service.invalidate_session(db, token)
+    await db.commit()
+
+    if not success:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    return None
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user),
+):
+    """Get current user information.
+
+    Returns the profile of the currently authenticated user.
+
+    Args:
+        current_user: Authenticated user (injected via dependency)
+
+    Returns:
+        UserResponse with user details
+
+    Raises:
+        HTTPException: 401 if not authenticated
+    """
+    return UserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        username=current_user.username,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at.isoformat(),
+    )
+
+
+@app.put("/api/auth/me", response_model=UserResponse)
+async def update_current_user(
+    request: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update current user profile.
+
+    Updates the profile of the currently authenticated user.
+    Only provided fields are updated.
+
+    Args:
+        request: UserUpdate with optional email, username, password
+        current_user: Authenticated user (injected via dependency)
+        db: Database session
+
+    Returns:
+        UserResponse with updated user details
+
+    Raises:
+        HTTPException: 400 if email/username conflict
+        HTTPException: 401 if not authenticated
+    """
+    try:
+        # Re-fetch user in this session
+        result = await db.execute(
+            select(User).where(User.id == current_user.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Update email if provided
+        if request.email and request.email.lower() != user.email:
+            existing_result = await db.execute(
+                select(User).where(User.email == request.email.lower())
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing and existing.id != user.id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email address already in use"
+                )
+            user.email = request.email.lower()
+
+        # Update username if provided
+        if request.username and request.username != user.username:
+            existing_result = await db.execute(
+                select(User).where(User.username == request.username)
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing and existing.id != user.id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Username already taken"
+                )
+            user.username = request.username
+
+        # Update password if provided
+        if request.password:
+            user.password_hash = hash_password(request.password)
+
+        await db.commit()
+        await db.refresh(user)
+
+        return UserResponse(
+            id=str(user.id),
+            email=user.email,
+            username=user.username,
+            is_active=user.is_active,
+            created_at=user.created_at.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update user: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/api-keys", response_model=APIKeyResponse, status_code=201)
+async def create_api_key_endpoint(
+    request: APIKeyCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new API key for the current user.
+
+    Generates a new API key with the specified name and permissions.
+    The plain key is returned only once - store it securely.
+
+    Args:
+        request: APIKeyCreate with name, permissions, optional expiration
+        current_user: Authenticated user (injected via dependency)
+        db: Database session
+
+    Returns:
+        APIKeyResponse with key details including the plain key (only on creation)
+
+    Raises:
+        HTTPException: 400 if key name already exists for user
+        HTTPException: 401 if not authenticated
+    """
+    try:
+        # Parse expiration if provided
+        expires_at = None
+        if request.expires_at:
+            try:
+                expires_at = datetime.fromisoformat(request.expires_at.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid expires_at format. Use ISO format."
+                )
+
+        # Create API key using auth service
+        plain_key, api_key = await auth_service.create_api_key(
+            db=db,
+            user_id=current_user.id,
+            name=request.name,
+            permissions={"actions": request.permissions},
+            expires_at=expires_at,
+        )
+        await db.commit()
+
+        return APIKeyResponse(
+            id=str(api_key.id),
+            name=api_key.name,
+            permissions=request.permissions,
+            created_at=api_key.created_at.isoformat(),
+            expires_at=api_key.expires_at.isoformat() if api_key.expires_at else None,
+            last_used_at=None,
+            key=plain_key,  # Only returned on creation
+            key_prefix=plain_key[:8],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create API key: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/api-keys", response_model=List[APIKeyResponse])
+async def list_api_keys(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all API keys for the current user.
+
+    Returns all active API keys owned by the authenticated user.
+    Note: The actual key values are not returned, only metadata.
+
+    Args:
+        current_user: Authenticated user (injected via dependency)
+        db: Database session
+
+    Returns:
+        List of APIKeyResponse with key metadata (no key values)
+
+    Raises:
+        HTTPException: 401 if not authenticated
+    """
+    try:
+        result = await db.execute(
+            select(APIKey)
+            .where(
+                and_(
+                    APIKey.user_id == current_user.id,
+                    APIKey.is_active == True,
+                )
+            )
+            .order_by(desc(APIKey.created_at))
+        )
+        api_keys = result.scalars().all()
+
+        return [
+            APIKeyResponse(
+                id=str(key.id),
+                name=key.name,
+                permissions=key.permissions.get("actions", []) if key.permissions else [],
+                created_at=key.created_at.isoformat(),
+                expires_at=key.expires_at.isoformat() if key.expires_at else None,
+                last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
+                key=None,  # Never return the actual key
+                key_prefix=key.key_hash[:8] if key.key_hash else None,  # Use hash prefix as identifier
+            )
+            for key in api_keys
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to list API keys: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/auth/api-keys/{key_id}", status_code=204)
+async def revoke_api_key_endpoint(
+    key_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke (delete) an API key.
+
+    Permanently deactivates the specified API key.
+    Only the key owner can revoke their own keys.
+
+    Args:
+        key_id: UUID of the API key to revoke
+        current_user: Authenticated user (injected via dependency)
+        db: Database session
+
+    Returns:
+        204 No Content on success
+
+    Raises:
+        HTTPException: 404 if key not found
+        HTTPException: 403 if key belongs to another user
+        HTTPException: 401 if not authenticated
+    """
+    try:
+        # Use auth service to revoke key (verifies ownership)
+        await auth_service.revoke_api_key(
+            db=db,
+            key_id=uuid.UUID(key_id),
+            user_id=current_user.id,
+        )
+        await db.commit()
+        return None
+
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid API key ID format")
+    except Exception as e:
+        logger.error(f"Failed to revoke API key: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Optional Prometheus metrics endpoint

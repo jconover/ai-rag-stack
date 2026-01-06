@@ -354,3 +354,65 @@ class ExperimentResultResponse(BaseModel):
     experiment_id: str = Field(..., description="Experiment identifier")
     variant_name: str = Field(..., description="Variant name")
     recorded_at: str = Field(..., description="Recording timestamp (ISO format)")
+
+
+# =====================
+# Authentication Models
+# =====================
+
+class UserCreate(BaseModel):
+    """Request to create a new user account"""
+    email: str = Field(..., description="User email address")
+    username: str = Field(..., min_length=3, max_length=50, description="Unique username")
+    password: str = Field(..., min_length=8, max_length=128, description="Password (minimum 8 characters)")
+
+
+class UserLogin(BaseModel):
+    """Request to authenticate a user"""
+    email_or_username: str = Field(..., description="Email address or username")
+    password: str = Field(..., description="User password")
+
+
+class UserResponse(BaseModel):
+    """User information response"""
+    id: str = Field(..., description="User unique identifier")
+    email: str = Field(..., description="User email address")
+    username: str = Field(..., description="Username")
+    is_active: bool = Field(True, description="Whether user account is active")
+    created_at: str = Field(..., description="Account creation timestamp (ISO format)")
+
+
+class UserUpdate(BaseModel):
+    """Request to update user profile"""
+    email: Optional[str] = Field(None, description="New email address")
+    username: Optional[str] = Field(None, min_length=3, max_length=50, description="New username")
+    password: Optional[str] = Field(None, min_length=8, max_length=128, description="New password")
+
+
+class TokenResponse(BaseModel):
+    """Authentication token response"""
+    access_token: str = Field(..., description="JWT access token")
+    token_type: str = Field("bearer", description="Token type")
+    expires_at: str = Field(..., description="Token expiration timestamp (ISO format)")
+
+
+class APIKeyCreate(BaseModel):
+    """Request to create a new API key"""
+    name: str = Field(..., min_length=1, max_length=100, description="API key name/description")
+    permissions: List[str] = Field(
+        default_factory=lambda: ["read", "chat"],
+        description="List of permissions: read, chat, write, admin"
+    )
+    expires_at: Optional[str] = Field(None, description="Optional expiration timestamp (ISO format)")
+
+
+class APIKeyResponse(BaseModel):
+    """API key information response"""
+    id: str = Field(..., description="API key unique identifier")
+    name: str = Field(..., description="API key name/description")
+    permissions: List[str] = Field(..., description="List of granted permissions")
+    created_at: str = Field(..., description="Creation timestamp (ISO format)")
+    expires_at: Optional[str] = Field(None, description="Expiration timestamp (ISO format)")
+    last_used_at: Optional[str] = Field(None, description="Last usage timestamp (ISO format)")
+    key: Optional[str] = Field(None, description="API key value (only returned on creation)")
+    key_prefix: Optional[str] = Field(None, description="First 8 characters of API key for identification")

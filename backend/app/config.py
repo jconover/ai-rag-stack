@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     ab_testing_auto_record_metrics: bool = os.getenv("AB_TESTING_AUTO_RECORD_METRICS", "true").lower() == "true"
     ab_testing_default_experiment: str | None = os.getenv("AB_TESTING_DEFAULT_EXPERIMENT") or None
 
+    # Authentication Configuration
+    auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    session_expire_hours: int = int(os.getenv("SESSION_EXPIRE_HOURS", 24))
+    api_key_prefix: str = os.getenv("API_KEY_PREFIX", "rag_")
+    require_email_verification: bool = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+
     @property
     def postgres_url(self) -> str:
         """Construct PostgreSQL async connection URL for asyncpg driver"""
