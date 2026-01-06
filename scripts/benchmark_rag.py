@@ -45,6 +45,7 @@ QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "devops_docs")
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 
@@ -312,7 +313,7 @@ class RAGBenchmark:
             print(f"Initializing embedding model on {EMBEDDING_DEVICE}...")
 
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name=EMBEDDING_MODEL,
             model_kwargs={'device': EMBEDDING_DEVICE}
         )
 
@@ -498,7 +499,7 @@ class RAGBenchmark:
             test_queries_count=len(queries),
             qdrant_collection=COLLECTION_NAME,
             qdrant_points_count=stats.get('points_count', 0),
-            embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+            embedding_model=EMBEDDING_MODEL,
             embedding_device=EMBEDDING_DEVICE,
             system_info={
                 "qdrant_host": QDRANT_HOST,

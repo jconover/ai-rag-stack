@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     # Embeddings - set to 'cuda' for GPU acceleration (5-10x faster)
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
+    # Embedding model - BAAI/bge-base-en-v1.5 offers +10-15% retrieval quality over all-MiniLM-L6-v2
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
+    # Embedding dimension - must match the model (bge-base-en-v1.5: 768, all-MiniLM-L6-v2: 384)
+    embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", 768))
 
     # Embedding Cache - cache embeddings to reduce computation
     embedding_cache_enabled: bool = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"

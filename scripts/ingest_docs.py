@@ -79,6 +79,10 @@ COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "devops_docs")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", 4))
+# Embedding model configuration
+# Note: Changing the embedding model requires full re-ingestion (--full flag)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", 768))
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # Set to 'cuda' for GPU
 
 # Chunking mode: 'semantic' (new) or 'legacy' (old RecursiveCharacterTextSplitter)
@@ -91,7 +95,6 @@ SPARSE_ENCODER_MODEL = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
 # Vector constants
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
-DENSE_VECTOR_SIZE = 384  # all-MiniLM-L6-v2
 
 
 class DocumentIngestionPipeline:
@@ -106,9 +109,10 @@ class DocumentIngestionPipeline:
                        If None, read from HYBRID_SEARCH_ENABLED env var.
         """
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name=EMBEDDING_MODEL,
             model_kwargs={'device': EMBEDDING_DEVICE}
         )
+        print(f"Embedding model: {EMBEDDING_MODEL} ({EMBEDDING_DIMENSION} dimensions)")
 
         # Initialize chunker based on mode
         self.use_semantic_chunking = use_semantic_chunking
@@ -155,17 +159,23 @@ class DocumentIngestionPipeline:
                 self.use_hybrid = False
 
     def _get_config_hash(self) -> str:
-        """Get hash of current chunking configuration."""
+        """Get hash of current chunking and embedding configuration.
+
+        Includes embedding model in the hash so that changing the model
+        triggers a configuration change warning (requires full re-ingestion).
+        """
         if self.use_semantic_chunking:
             # Use chunker config for semantic mode
             cfg = self.chunker.config
             config_str = f"semantic:{cfg.prose_chunk_size}:{cfg.prose_chunk_overlap}"
         else:
             config_str = f"legacy:{CHUNK_SIZE}:{CHUNK_OVERLAP}"
+        # Include embedding model in config hash - changing model requires full re-ingestion
+        config_str += f":embedding:{EMBEDDING_MODEL}:{EMBEDDING_DIMENSION}"
         return compute_config_hash(CHUNK_SIZE, CHUNK_OVERLAP, config_str)
 
     def _config_changed(self) -> bool:
-        """Check if chunking configuration has changed since last ingestion."""
+        """Check if chunking or embedding configuration has changed since last ingestion."""
         current_hash = self._get_config_hash()
         stored_hash = self.registry.get_config_hash()
 
@@ -175,9 +185,10 @@ class DocumentIngestionPipeline:
             return False
 
         if current_hash != stored_hash:
-            print(f"WARNING: Chunking configuration has changed!")
-            print(f"  Previous: {stored_hash}")
-            print(f"  Current: {current_hash}")
+            print(f"WARNING: Configuration has changed (chunking or embedding model)!")
+            print(f"  Previous hash: {stored_hash}")
+            print(f"  Current hash: {current_hash}")
+            print(f"  Embedding model: {EMBEDDING_MODEL} ({EMBEDDING_DIMENSION} dims)")
             return True
 
         return False
@@ -352,7 +363,7 @@ class DocumentIngestionPipeline:
                 collection_name=collection_name,
                 vectors_config={
                     DENSE_VECTOR_NAME: VectorParams(
-                        size=DENSE_VECTOR_SIZE,
+                        size=EMBEDDING_DIMENSION,
                         distance=Distance.COSINE,
                     )
                 },
@@ -362,7 +373,8 @@ class DocumentIngestionPipeline:
                     )
                 },
             )
-            print(f"Created collection '{collection_name}' with hybrid vector support")
+            print(f"Created collection '{collection_name}' with hybrid vector support "
+                  f"(dense: {EMBEDDING_DIMENSION} dims)")
         else:
             print(f"Collection '{collection_name}' already exists")
 
@@ -818,6 +830,7 @@ def main():
     print("Starting DevOps Documentation Ingestion Pipeline...")
     print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
     print(f"Collection: {COLLECTION_NAME}")
+    print(f"Embedding model: {EMBEDDING_MODEL} ({EMBEDDING_DIMENSION} dims, device={EMBEDDING_DEVICE})")
     print(f"Chunking mode: {'semantic' if use_semantic else 'legacy'}")
     print(f"Hybrid search: {'enabled' if HYBRID_SEARCH_ENABLED else 'disabled'}")
     print(f"Incremental mode: {'disabled (--full)' if args.full else 'enabled'}")

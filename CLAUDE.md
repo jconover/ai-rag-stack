@@ -87,9 +87,11 @@ Markdown/Text → LangChain DirectoryLoader → RecursiveCharacterTextSplitter
 
 ### RAG Configuration
 - **Chunk Size**: 1000 chars with 200 overlap
-- **Embedding**: `all-MiniLM-L6-v2` (384 dims, CPU)
+- **Embedding**: `BAAI/bge-base-en-v1.5` (768 dims, CPU)
 - **Top K**: 5 documents per query
 - **Collection**: `devops_docs` in Qdrant
+
+> **Note**: Changing the embedding model requires full re-ingestion of all documents. Run `make ingest` after modifying `EMBEDDING_MODEL` or `EMBEDDING_DIMENSION` in `.env`.
 
 ### Environment Variables (`.env`)
 
@@ -98,6 +100,8 @@ Markdown/Text → LangChain DirectoryLoader → RecursiveCharacterTextSplitter
 - `QDRANT_HOST`, `QDRANT_PORT` - Vector DB
 - `REDIS_HOST`, `REDIS_PORT` - Conversation memory
 - `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K_RESULTS` - RAG tuning
+- `EMBEDDING_MODEL` - HuggingFace embedding model (default: BAAI/bge-base-en-v1.5)
+- `EMBEDDING_DIMENSION` - Vector dimension matching model output (default: 768)
 
 **Advanced RAG Features:**
 - `HYBRID_SEARCH_ENABLED=true` - Enable BM25 + vector hybrid search

@@ -214,11 +214,23 @@ Tavily web search to find relevant documentation from trusted sources.
 - Free tier: 1,000 searches/month
 - Pay-as-you-go: $0.008/search
 
-#### 6. Upgrade Embedding Model
+#### 6. Upgrade Embedding Model ✅
 
-**Impact:** +10-15% retrieval quality | **Effort:** Low
+**Impact:** +10-15% retrieval quality | **Effort:** Low | **Status:** DONE
 
-Switch from `all-MiniLM-L6-v2` to `BAAI/bge-base-en-v1.5` (768 dims).
+**Files Modified:**
+- `backend/app/config.py` - `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION` settings
+- `backend/app/vectorstore.py` - Uses configurable model and dimension
+- `scripts/ingest_docs.py` - Configurable embedding for ingestion
+- `scripts/benchmark_rag.py` - Updated for new model
+- `.env.example`, `CLAUDE.md` - Documentation updated
+
+**Configuration:**
+- `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5` (default, 768 dims)
+- `EMBEDDING_DIMENSION=768` (must match model)
+- Backwards compatible: set to `sentence-transformers/all-MiniLM-L6-v2` + `384` to revert
+
+**Note:** Requires full re-ingestion after changing model (`make ingest`).
 
 ---
 
@@ -446,6 +458,7 @@ hnsw_config=HnswConfigDiff(
 - [x] GitHub Actions CI/CD (ci.yml, docker-publish.yml, security.yml, dependabot.yml)
 - [x] Redis connection pooling (50 max connections, configurable timeouts, pool stats in health)
 - [x] Redis embedding cache (MD5 hash keys, 1-hour TTL, 30-50% latency reduction)
+- [x] Embedding model upgrade (BAAI/bge-base-en-v1.5, 768 dims, +10-15% retrieval quality)
 - [ ] PostgreSQL for analytics/metadata
 - [ ] A/B testing framework
 - [ ] User accounts & persistent sessions

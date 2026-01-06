@@ -340,7 +340,7 @@ class VectorStore:
             timeout=30,  # 30 second timeout for operations
         )
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_name=settings.embedding_model,
             model_kwargs={'device': settings.embedding_device}
         )
         # Warmup the embedding model to eliminate first-query cold-start latency
@@ -357,7 +357,7 @@ class VectorStore:
         if self.collection_name not in collection_names:
             # Create collection with optimized HNSW and quantization settings
             vectors_config = VectorParams(
-                size=384,  # all-MiniLM-L6-v2 embedding dimension
+                size=settings.embedding_dimension,  # Configurable embedding dimension
                 distance=Distance.COSINE,
                 hnsw_config=HnswConfigDiff(
                     m=self.HNSW_M,
