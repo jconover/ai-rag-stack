@@ -14,7 +14,7 @@ from app.config import settings
 from app.models import (
     ChatRequest, ChatResponse, HealthResponse,
     ModelsResponse, ModelInfo, StatsResponse,
-    FeedbackRequest, FeedbackResponse
+    FeedbackRequest, FeedbackResponse, RedisPoolStats
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
@@ -41,13 +41,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Redis client for conversation memory
-redis_client = redis.Redis(
+# Redis connection pool for conversation memory
+# Connection pooling improves performance by reusing connections instead of
+# creating new ones for each request. This reduces connection overhead and
+# prevents connection exhaustion under high load.
+redis_pool = redis.ConnectionPool(
     host=settings.redis_host,
     port=settings.redis_port,
     db=settings.redis_db,
+    max_connections=settings.redis_max_connections,
+    socket_timeout=settings.redis_socket_timeout,
+    socket_connect_timeout=settings.redis_socket_connect_timeout,
     decode_responses=True
 )
+redis_client = redis.Redis(connection_pool=redis_pool)
+
+
+def get_redis_pool_stats() -> dict:
+    """Get Redis connection pool statistics for monitoring.
+
+    Returns:
+        Dictionary with pool configuration and current usage stats
+    """
+    try:
+        pool_info = {
+            "max_connections": redis_pool.max_connections,
+            "current_connections": len(redis_pool._in_use_connections),
+            "available_connections": len(redis_pool._available_connections),
+            "host": settings.redis_host,
+            "port": settings.redis_port,
+            "db": settings.redis_db,
+        }
+        return pool_info
+    except Exception:
+        return {
+            "max_connections": settings.redis_max_connections,
+            "error": "Unable to retrieve pool stats"
+        }
 
 
 def get_conversation_history(session_id: str, limit: int = 5) -> list:
@@ -85,7 +115,7 @@ async def root():
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint with component status including reranker."""
+    """Health check endpoint with component status including reranker and Redis pool."""
     ollama_connected = rag_pipeline.is_ollama_connected()
     qdrant_connected = vector_store.is_connected()
 
@@ -97,6 +127,17 @@ async def health_check():
 
     # Get reranker status
     reranker_status = rag_pipeline.get_reranker_status()
+
+    # Get Redis pool statistics
+    pool_stats = get_redis_pool_stats()
+    redis_pool_stats = RedisPoolStats(
+        max_connections=pool_stats.get("max_connections", settings.redis_max_connections),
+        current_connections=pool_stats.get("current_connections"),
+        available_connections=pool_stats.get("available_connections"),
+        host=pool_stats.get("host"),
+        port=pool_stats.get("port"),
+        db=pool_stats.get("db"),
+    )
 
     # Core services must be connected for healthy status
     core_healthy = all([ollama_connected, qdrant_connected, redis_connected])
@@ -115,6 +156,7 @@ async def health_check():
         reranker_enabled=reranker_status.get('enabled', False),
         reranker_loaded=reranker_status.get('loaded', False),
         reranker_model=reranker_status.get('model_name'),
+        redis_pool=redis_pool_stats,
     )
 
 

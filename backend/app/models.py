@@ -57,6 +57,16 @@ class ComponentStatus(BaseModel):
     error: Optional[str] = Field(None, description="Error message if not connected")
 
 
+class RedisPoolStats(BaseModel):
+    """Redis connection pool statistics"""
+    max_connections: int = Field(..., description="Maximum pool connections configured")
+    current_connections: Optional[int] = Field(None, description="Connections currently in use")
+    available_connections: Optional[int] = Field(None, description="Connections available in pool")
+    host: Optional[str] = Field(None, description="Redis host")
+    port: Optional[int] = Field(None, description="Redis port")
+    db: Optional[int] = Field(None, description="Redis database number")
+
+
 class HealthResponse(BaseModel):
     status: str
     ollama_connected: bool
@@ -65,6 +75,7 @@ class HealthResponse(BaseModel):
     reranker_enabled: bool = Field(False, description="Whether reranker is enabled")
     reranker_loaded: bool = Field(False, description="Whether reranker model is loaded")
     reranker_model: Optional[str] = Field(None, description="Reranker model name")
+    redis_pool: Optional[RedisPoolStats] = Field(None, description="Redis connection pool statistics")
     components: Optional[Dict[str, ComponentStatus]] = Field(None, description="Detailed component status")
 
 

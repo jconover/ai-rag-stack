@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     redis_host: str = os.getenv("REDIS_HOST", "localhost")
     redis_port: int = int(os.getenv("REDIS_PORT", 6379))
     redis_db: int = int(os.getenv("REDIS_DB", 0))
+
+    # Redis Connection Pool
+    redis_max_connections: int = int(os.getenv("REDIS_MAX_CONNECTIONS", 50))
+    redis_socket_timeout: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", 5.0))
+    redis_socket_connect_timeout: float = float(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", 5.0))
     
     # RAG
     chunk_size: int = int(os.getenv("CHUNK_SIZE", 1000))

@@ -50,6 +50,8 @@ Thumbs.db
 
 # Data
 data/docs/
+data/custom/
+data/logs/
 *.db
 *.sqlite
 
