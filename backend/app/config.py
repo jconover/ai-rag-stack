@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Embeddings - set to 'cuda' for GPU acceleration (5-10x faster)
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
+    # Embedding Cache - cache embeddings to reduce computation
+    embedding_cache_enabled: bool = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
+    embedding_cache_ttl: int = int(os.getenv("EMBEDDING_CACHE_TTL", 3600))  # TTL in seconds (default: 1 hour)
+
     # Reranker - Cross-encoder for improved retrieval quality
     reranker_enabled: bool = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
     reranker_model: str = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")

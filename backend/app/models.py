@@ -39,6 +39,7 @@ class RetrievalMetrics(BaseModel):
     avg_rerank_score: Optional[float] = Field(None, description="Average rerank score")
     retrieval_time_ms: Optional[float] = Field(None, description="Time for vector retrieval in ms")
     rerank_time_ms: Optional[float] = Field(None, description="Time for reranking in ms")
+    embedding_cache_hit: Optional[bool] = Field(None, description="Whether query embedding was served from cache")
 
 
 class ChatResponse(BaseModel):

@@ -56,6 +56,8 @@ class RetrievalResult:
     web_search_trigger_reason: Optional[str] = None
     web_search_error: Optional[str] = None
     web_search_context: str = ""  # Formatted web results for context
+    # Embedding cache tracking
+    embedding_cache_hit: Optional[bool] = None
 
 
 class RAGPipeline:
@@ -173,19 +175,21 @@ Question: {query}"""
         retrieval_start = time.perf_counter()
         try:
             # Use hybrid search if enabled, otherwise dense-only
+            # Both methods now return (results, cache_hit) tuple
             if settings.hybrid_search_enabled:
-                results_with_scores = vector_store.hybrid_search_with_scores(
+                results_with_scores, cache_hit = vector_store.hybrid_search_with_cache_info(
                     query=search_query,
                     top_k=initial_top_k,
                     min_score=settings.min_similarity_score
                 )
                 result.hybrid_search_used = True
             else:
-                results_with_scores = vector_store.search_with_scores(
+                results_with_scores, cache_hit = vector_store.search_with_cache_info(
                     query=search_query,
                     top_k=initial_top_k,
                     min_score=settings.min_similarity_score
                 )
+            result.embedding_cache_hit = cache_hit
             result.retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
             result.initial_count = len(results_with_scores)
 
@@ -457,6 +461,7 @@ Question: {query}"""
             'web_search_reason': result.web_search_trigger_reason,
             'web_search_results': result.web_search_results_count if result.web_search_used else None,
             'web_search_time_ms': round(result.web_search_time_ms, 2) if result.web_search_used else None,
+            'embedding_cache_hit': result.embedding_cache_hit,
         }
 
         # Calculate average scores
