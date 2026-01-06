@@ -273,14 +273,23 @@ Sample 5-10% of responses for automated evaluation:
 
 ### Infrastructure Improvements
 
-#### 1. GitHub Actions CI/CD
+#### 1. GitHub Actions CI/CD ✅
 
-Create `.github/workflows/ci.yml`:
+**Status:** DONE
 
-- Automated Docker image builds
+**Files Created:**
+- `.github/workflows/ci.yml` - Main CI pipeline (lint, typecheck, test, build)
+- `.github/workflows/docker-publish.yml` - Multi-platform Docker builds + Docker Hub push
+- `.github/workflows/security.yml` - Trivy, pip-audit, Hadolint, Gitleaks scanning
+- `.github/dependabot.yml` - Automated dependency updates (Python, npm, Docker, Actions)
+
+**Features:**
+- Automated Docker image builds (amd64 + arm64)
 - Image vulnerability scanning (Trivy)
 - Push to Docker Hub on tagged releases
 - Run tests before deployment
+- Weekly security scans
+- Grouped dependency updates
 
 #### 2. Redis Connection Pooling
 
@@ -421,6 +430,7 @@ hnsw_config=HnswConfigDiff(
 - [x] HyDE query expansion for vague queries (~2.2s generation, smart skip patterns)
 - [x] Web search fallback (Tavily) for queries with low local retrieval scores
 - [x] Incremental ingestion with change detection (SHA-256 hash tracking, SQLite registry)
+- [x] GitHub Actions CI/CD (ci.yml, docker-publish.yml, security.yml, dependabot.yml)
 - [ ] PostgreSQL for analytics/metadata
 - [ ] A/B testing framework
 - [ ] User accounts & persistent sessions
@@ -519,5 +529,5 @@ Post-ingestion checks:
 ---
 
 _Document generated: 2025-01-04_
-_Last updated: 2026-01-05_
+_Last updated: 2026-01-06_
 _Based on reviews from 12 specialized AI agents_

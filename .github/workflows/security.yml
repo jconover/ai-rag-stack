@@ -1,0 +1,373 @@
+# =============================================================================
+# Security Scanning Workflow for DevOps AI Assistant RAG System
+# =============================================================================
+# This workflow performs comprehensive security scanning including:
+# - Container image vulnerability scanning (Trivy)
+# - Filesystem/code vulnerability scanning (Trivy)
+# - Python dependency vulnerability scanning (pip-audit)
+# - Node.js dependency vulnerability scanning (npm audit)
+#
+# Results are uploaded to GitHub Security tab as SARIF reports
+# =============================================================================
+
+name: Security Scanning
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    # Allow manual triggering
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  BACKEND_IMAGE: jconover/ai-rag-backend:latest
+  FRONTEND_IMAGE: jconover/ai-rag-frontend:latest
+
+jobs:
+  # ===========================================================================
+  # Trivy Container Image Scanning
+  # ===========================================================================
+  trivy-container-scan:
+    name: Container Image Vulnerability Scan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: jconover/ai-rag-backend:latest
+            name: backend
+          - image: jconover/ai-rag-frontend:latest
+            name: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull container image
+        env:
+          IMAGE_REF: ${{ matrix.image }}
+        run: docker pull "$IMAGE_REF"
+
+      - name: Run Trivy vulnerability scanner on container image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          format: 'sarif'
+          output: 'trivy-container-${{ matrix.name }}.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'os,library'
+          ignore-unfixed: true
+          timeout: '15m'
+
+      - name: Upload Trivy container scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-container-${{ matrix.name }}.sarif'
+          category: 'trivy-container-${{ matrix.name }}'
+
+      - name: Run Trivy and fail on critical/high vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          vuln-type: 'os,library'
+          ignore-unfixed: true
+          exit-code: '1'
+          timeout: '15m'
+
+  # ===========================================================================
+  # Trivy Filesystem Scanning (Code and Config Vulnerabilities)
+  # ===========================================================================
+  trivy-filesystem-scan:
+    name: Filesystem Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-filesystem.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'os,library'
+          scanners: 'vuln,secret,misconfig'
+          ignore-unfixed: true
+          timeout: '15m'
+
+      - name: Upload Trivy filesystem scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-filesystem.sarif'
+          category: 'trivy-filesystem'
+
+      - name: Run Trivy filesystem scan and fail on critical/high vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          vuln-type: 'os,library'
+          scanners: 'vuln,secret,misconfig'
+          ignore-unfixed: true
+          exit-code: '1'
+          timeout: '15m'
+
+  # ===========================================================================
+  # Python Dependency Vulnerability Scanning
+  # ===========================================================================
+  python-dependency-scan:
+    name: Python Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit on backend requirements (SARIF output)
+        run: |
+          pip-audit \
+            --requirement backend/requirements.txt \
+            --format sarif \
+            --output pip-audit.sarif \
+            --progress-spinner off || true
+
+      - name: Run pip-audit on backend requirements (summary)
+        run: |
+          echo "## pip-audit Results" >> "$GITHUB_STEP_SUMMARY"
+          pip-audit \
+            --requirement backend/requirements.txt \
+            --format markdown \
+            --progress-spinner off >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload pip-audit results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'pip-audit.sarif'
+          category: 'pip-audit'
+
+      - name: Fail on critical/high Python vulnerabilities
+        run: |
+          pip-audit \
+            --requirement backend/requirements.txt \
+            --strict \
+            --progress-spinner off
+
+  # ===========================================================================
+  # Node.js Dependency Vulnerability Scanning
+  # ===========================================================================
+  npm-dependency-scan:
+    name: Node.js Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run npm audit (JSON output)
+        working-directory: frontend
+        run: npm audit --json > npm-audit.json || true
+
+      - name: Run npm audit (summary)
+        working-directory: frontend
+        run: |
+          echo "## npm audit Results" >> "$GITHUB_STEP_SUMMARY"
+          npm audit --omit=dev >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Convert npm audit to SARIF
+        working-directory: frontend
+        run: |
+          npm install -g npm-audit-sarif
+          cat npm-audit.json | npm-audit-sarif > npm-audit.sarif || echo '{"version":"2.1.0","$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","runs":[{"tool":{"driver":{"name":"npm-audit","version":"1.0.0","rules":[]}},"results":[]}]}' > npm-audit.sarif
+
+      - name: Upload npm audit results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'frontend/npm-audit.sarif'
+          category: 'npm-audit'
+
+      - name: Fail on high/critical npm vulnerabilities
+        working-directory: frontend
+        run: npm audit --audit-level=high --omit=dev
+
+  # ===========================================================================
+  # Dockerfile Linting with Hadolint
+  # ===========================================================================
+  dockerfile-lint:
+    name: Dockerfile Security Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint on backend Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/Dockerfile
+          format: sarif
+          output-file: hadolint-backend.sarif
+          failure-threshold: error
+
+      - name: Run Hadolint on frontend Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile
+          format: sarif
+          output-file: hadolint-frontend.sarif
+          failure-threshold: error
+
+      - name: Upload Hadolint backend results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: hadolint-backend.sarif
+          category: 'hadolint-backend'
+
+      - name: Upload Hadolint frontend results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: hadolint-frontend.sarif
+          category: 'hadolint-frontend'
+
+  # ===========================================================================
+  # Secret Scanning with Gitleaks
+  # ===========================================================================
+  secret-scan:
+    name: Secret Detection Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ===========================================================================
+  # Security Scan Summary
+  # ===========================================================================
+  security-summary:
+    name: Security Scan Summary
+    runs-on: ubuntu-latest
+    needs:
+      - trivy-container-scan
+      - trivy-filesystem-scan
+      - python-dependency-scan
+      - npm-dependency-scan
+      - dockerfile-lint
+      - secret-scan
+    if: always()
+
+    steps:
+      - name: Check scan results
+        env:
+          CONTAINER_RESULT: ${{ needs.trivy-container-scan.result }}
+          FILESYSTEM_RESULT: ${{ needs.trivy-filesystem-scan.result }}
+          PYTHON_RESULT: ${{ needs.python-dependency-scan.result }}
+          NPM_RESULT: ${{ needs.npm-dependency-scan.result }}
+          DOCKERFILE_RESULT: ${{ needs.dockerfile-lint.result }}
+          SECRET_RESULT: ${{ needs.secret-scan.result }}
+        run: |
+          echo "## Security Scan Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$CONTAINER_RESULT" == "success" ]; then
+            echo "- Container Image Scan: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Container Image Scan: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$FILESYSTEM_RESULT" == "success" ]; then
+            echo "- Filesystem Scan: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Filesystem Scan: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$PYTHON_RESULT" == "success" ]; then
+            echo "- Python Dependencies: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Python Dependencies: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$NPM_RESULT" == "success" ]; then
+            echo "- Node.js Dependencies: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Node.js Dependencies: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$DOCKERFILE_RESULT" == "success" ]; then
+            echo "- Dockerfile Lint: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Dockerfile Lint: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$SECRET_RESULT" == "success" ]; then
+            echo "- Secret Detection: PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Secret Detection: FAILED" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "View detailed results in the Security tab of this repository." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any security scan failed
+        env:
+          CONTAINER_RESULT: ${{ needs.trivy-container-scan.result }}
+          FILESYSTEM_RESULT: ${{ needs.trivy-filesystem-scan.result }}
+          PYTHON_RESULT: ${{ needs.python-dependency-scan.result }}
+          NPM_RESULT: ${{ needs.npm-dependency-scan.result }}
+          DOCKERFILE_RESULT: ${{ needs.dockerfile-lint.result }}
+          SECRET_RESULT: ${{ needs.secret-scan.result }}
+        run: |
+          if [ "$CONTAINER_RESULT" == "failure" ] || \
+             [ "$FILESYSTEM_RESULT" == "failure" ] || \
+             [ "$PYTHON_RESULT" == "failure" ] || \
+             [ "$NPM_RESULT" == "failure" ] || \
+             [ "$DOCKERFILE_RESULT" == "failure" ] || \
+             [ "$SECRET_RESULT" == "failure" ]; then
+            echo "One or more security scans failed. Please review the results."
+            exit 1
+          fi

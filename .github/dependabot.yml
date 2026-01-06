@@ -1,0 +1,273 @@
+# =============================================================================
+# Dependabot Configuration for DevOps AI Assistant
+# =============================================================================
+# Automated dependency updates for Python, npm, Docker, and GitHub Actions
+# Documentation: https://docs.github.com/en/code-security/dependabot
+# =============================================================================
+
+version: 2
+
+registries:
+  # PyTorch CPU index for torch packages
+  pytorch-cpu:
+    type: python-index
+    url: https://download.pytorch.org/whl/cpu
+
+updates:
+  # ---------------------------------------------------------------------------
+  # Python Dependencies (Backend)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "justin"
+    labels:
+      - "dependencies"
+      - "python"
+      - "backend"
+    commit-message:
+      prefix: "deps(python)"
+    # Group minor and patch updates to reduce PR noise
+    groups:
+      # Core FastAPI and web framework dependencies
+      fastapi-stack:
+        patterns:
+          - "fastapi*"
+          - "uvicorn*"
+          - "pydantic*"
+          - "starlette*"
+        update-types:
+          - "minor"
+          - "patch"
+      # LangChain ecosystem
+      langchain-ecosystem:
+        patterns:
+          - "langchain*"
+        update-types:
+          - "minor"
+          - "patch"
+      # ML and embeddings
+      ml-libraries:
+        patterns:
+          - "sentence-transformers*"
+          - "torch*"
+          - "transformers*"
+          - "huggingface*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Vector store and search
+      vector-store:
+        patterns:
+          - "qdrant*"
+          - "fastembed*"
+        update-types:
+          - "minor"
+          - "patch"
+      # HTTP clients
+      http-clients:
+        patterns:
+          - "httpx*"
+          - "aiohttp*"
+          - "requests*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Testing dependencies
+      testing:
+        patterns:
+          - "pytest*"
+        update-types:
+          - "minor"
+          - "patch"
+      # NLP and text processing
+      nlp-tools:
+        patterns:
+          - "nltk*"
+          - "spacy*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Redis and caching
+      redis-stack:
+        patterns:
+          - "redis*"
+          - "hiredis*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Minor and patch updates for everything else
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "fastapi*"
+          - "uvicorn*"
+          - "pydantic*"
+          - "starlette*"
+          - "langchain*"
+          - "sentence-transformers*"
+          - "torch*"
+          - "transformers*"
+          - "huggingface*"
+          - "qdrant*"
+          - "fastembed*"
+          - "httpx*"
+          - "aiohttp*"
+          - "requests*"
+          - "pytest*"
+          - "nltk*"
+          - "spacy*"
+          - "redis*"
+          - "hiredis*"
+    # Ignore packages with known compatibility constraints
+    ignore:
+      # httpx is pinned to <0.26.0 due to ollama compatibility
+      - dependency-name: "httpx"
+        versions: [">=0.26.0"]
+
+  # ---------------------------------------------------------------------------
+  # npm Dependencies (Frontend)
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "justin"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "frontend"
+    commit-message:
+      prefix: "deps(npm)"
+    # Group updates by category
+    groups:
+      # React ecosystem
+      react-ecosystem:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "react-scripts"
+          - "@types/react*"
+        update-types:
+          - "minor"
+          - "patch"
+      # Markdown rendering
+      markdown-rendering:
+        patterns:
+          - "react-markdown"
+          - "remark*"
+          - "rehype*"
+        update-types:
+          - "minor"
+          - "patch"
+      # All other minor and patch updates
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "react"
+          - "react-dom"
+          - "react-scripts"
+          - "@types/react*"
+          - "react-markdown"
+          - "remark*"
+          - "rehype*"
+
+  # ---------------------------------------------------------------------------
+  # Docker Base Images
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "justin"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "backend"
+    commit-message:
+      prefix: "deps(docker)"
+    groups:
+      # Group all Docker base image updates
+      docker-images:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "justin"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "frontend"
+    commit-message:
+      prefix: "deps(docker)"
+    groups:
+      # Group all Docker base image updates
+      docker-images:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "justin"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci-cd"
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      # Group all GitHub Actions updates
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
