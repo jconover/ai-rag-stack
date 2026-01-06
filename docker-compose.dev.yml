@@ -60,6 +60,26 @@ services:
       timeout: 10s
       retries: 3
 
+  # PostgreSQL - Relational database for metadata and analytics
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-raguser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ragpassword}
+      - POSTGRES_DB=${POSTGRES_DB:-ragdb}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # Backend API - FastAPI with RAG pipeline (DEV MODE with volume mounts)
   backend:
     build:
@@ -78,6 +98,11 @@ services:
       - QDRANT_PORT=6333
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-raguser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ragpassword}
+      - POSTGRES_DB=${POSTGRES_DB:-ragdb}
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=info
       - RERANKER_ENABLED=true
@@ -94,6 +119,8 @@ services:
       qdrant:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -160,6 +187,8 @@ volumes:
   qdrant_data:
     driver: local
   redis_data:
+    driver: local
+  postgres_data:
     driver: local
   prometheus_data:
     driver: local

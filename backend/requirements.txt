@@ -57,6 +57,16 @@ redis>=5.0.0
 hiredis>=2.3.0
 
 # -----------------------------------------------------------------------------
+# PostgreSQL Database
+# -----------------------------------------------------------------------------
+# Async PostgreSQL driver for high-performance database operations
+asyncpg>=0.29.0
+# SQLAlchemy with async support for ORM and query building
+sqlalchemy[asyncio]>=2.0.25
+# Sync PostgreSQL adapter (fallback for migrations, scripts)
+psycopg2-binary>=2.9.9
+
+# -----------------------------------------------------------------------------
 # Document Processing
 # -----------------------------------------------------------------------------
 unstructured>=0.12.0

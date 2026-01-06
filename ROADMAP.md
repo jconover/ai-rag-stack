@@ -377,14 +377,29 @@ python ingest_docs.py --clear-registry  # Reset registry
 - Subsequent runs: Only new/changed files processed
 - Change detection: ~5-10s for 10k files (hash computation)
 
-#### 5. Add PostgreSQL
+#### 5. Add PostgreSQL ✅
 
-For structured data:
+**Status:** DONE
 
-- Document registry (ingestion metadata)
-- Query analytics
-- User feedback storage
-- Audit trails
+**Files Created:**
+- `backend/app/database.py` - Async SQLAlchemy engine, session management, health checks
+- `backend/app/db_models.py` - QueryLog, Feedback, IngestionRegistry models
+
+**Files Modified:**
+- `docker-compose.yml`, `docker-compose.dev.yml` - PostgreSQL service (postgres:16-alpine)
+- `backend/app/main.py` - Query logging, analytics endpoints, health check integration
+- `backend/app/config.py` - PostgreSQL configuration settings
+- `backend/app/models.py` - Analytics response models
+- `backend/requirements.txt` - asyncpg, sqlalchemy[asyncio], psycopg2-binary
+
+**New Endpoints:**
+- `GET /api/analytics/queries` - Query logs with filters (date, model, latency)
+- `GET /api/analytics/queries/summary` - Aggregated statistics
+
+**Configuration:**
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+- `POSTGRES_POOL_SIZE=10`, `POSTGRES_MAX_OVERFLOW=20`
+- `QUERY_LOGGING_ENABLED=true`
 
 ---
 
@@ -459,7 +474,7 @@ hnsw_config=HnswConfigDiff(
 - [x] Redis connection pooling (50 max connections, configurable timeouts, pool stats in health)
 - [x] Redis embedding cache (MD5 hash keys, 1-hour TTL, 30-50% latency reduction)
 - [x] Embedding model upgrade (BAAI/bge-base-en-v1.5, 768 dims, +10-15% retrieval quality)
-- [ ] PostgreSQL for analytics/metadata
+- [x] PostgreSQL for analytics/metadata (query logs, feedback, ingestion registry)
 - [ ] A/B testing framework
 - [ ] User accounts & persistent sessions
 

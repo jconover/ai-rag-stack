@@ -88,6 +88,29 @@ class Settings(BaseSettings):
     # Use "*" only for development; in production, specify exact origins
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
 
+    # PostgreSQL Database
+    postgres_host: str = os.getenv("POSTGRES_HOST", "localhost")
+    postgres_port: int = int(os.getenv("POSTGRES_PORT", 5432))
+    postgres_user: str = os.getenv("POSTGRES_USER", "devops_assistant")
+    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "devops_password")
+    postgres_db: str = os.getenv("POSTGRES_DB", "devops_assistant")
+    postgres_pool_size: int = int(os.getenv("POSTGRES_POOL_SIZE", 10))
+    postgres_max_overflow: int = int(os.getenv("POSTGRES_MAX_OVERFLOW", 20))
+    postgres_pool_timeout: int = int(os.getenv("POSTGRES_POOL_TIMEOUT", 30))
+    postgres_pool_recycle: int = int(os.getenv("POSTGRES_POOL_RECYCLE", 3600))  # Recycle connections after 1 hour
+    postgres_echo_sql: bool = os.getenv("POSTGRES_ECHO_SQL", "false").lower() == "true"
+
+    # Query logging - enable/disable PostgreSQL query logging
+    query_logging_enabled: bool = os.getenv("QUERY_LOGGING_ENABLED", "true").lower() == "true"
+
+    @property
+    def postgres_url(self) -> str:
+        """Construct PostgreSQL async connection URL for asyncpg driver"""
+        return (
+            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
     @property
     def cors_origins_list(self) -> list:
         """Parse CORS_ORIGINS into a list of origins"""
