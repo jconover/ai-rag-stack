@@ -477,12 +477,46 @@ class DocumentIngestionPipeline:
         """
         # Documentation sources to ingest
         doc_sources = {
+            # DevOps & Infrastructure
             "kubernetes": os.path.join(DOCS_DIR, "kubernetes"),
             "kubernetes-ai": os.path.join(DOCS_DIR, "kubernetes-ai"),
             "terraform": os.path.join(DOCS_DIR, "terraform"),
             "docker": os.path.join(DOCS_DIR, "docker"),
             "ansible": os.path.join(DOCS_DIR, "ansible"),
+            "helm": os.path.join(DOCS_DIR, "helm"),
+            "argocd": os.path.join(DOCS_DIR, "argocd"),
+            "istio": os.path.join(DOCS_DIR, "istio"),
+            # Monitoring & Logging
             "prometheus": os.path.join(DOCS_DIR, "prometheus"),
+            "grafana": os.path.join(DOCS_DIR, "grafana"),
+            "elasticsearch": os.path.join(DOCS_DIR, "elasticsearch"),
+            "logstash": os.path.join(DOCS_DIR, "logstash"),
+            "kibana": os.path.join(DOCS_DIR, "kibana"),
+            # Programming Languages
+            "python": os.path.join(DOCS_DIR, "python"),
+            "go": os.path.join(DOCS_DIR, "go"),
+            "rust": os.path.join(DOCS_DIR, "rust"),
+            "nodejs": os.path.join(DOCS_DIR, "nodejs"),
+            "javascript": os.path.join(DOCS_DIR, "javascript"),
+            "bash": os.path.join(DOCS_DIR, "bash"),
+            "zsh": os.path.join(DOCS_DIR, "zsh"),
+            # CI/CD & GitOps
+            "git": os.path.join(DOCS_DIR, "git"),
+            "jenkins": os.path.join(DOCS_DIR, "jenkins"),
+            "github-actions": os.path.join(DOCS_DIR, "github-actions"),
+            "gitlab": os.path.join(DOCS_DIR, "gitlab"),
+            # Cloud Platforms
+            "aws": os.path.join(DOCS_DIR, "aws"),
+            "azure": os.path.join(DOCS_DIR, "azure"),
+            "gcp": os.path.join(DOCS_DIR, "gcp"),
+            # Web & Networking
+            "nginx": os.path.join(DOCS_DIR, "nginx"),
+            "linux": os.path.join(DOCS_DIR, "linux"),
+            # Automation & Integration
+            "n8n": os.path.join(DOCS_DIR, "n8n"),
+            # Configuration
+            "config-formats": os.path.join(DOCS_DIR, "config-formats"),
+            # Custom user docs
             "custom": CUSTOM_DOCS_DIR,
         }
 

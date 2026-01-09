@@ -934,19 +934,30 @@ async def get_query_analytics_summary(
             avg_latency = avg_result.scalar()
 
             # Latency percentiles (using PostgreSQL percentile_cont)
-            percentile_query = text("""
+            # Build date filter clause for raw SQL
+            date_conditions = ["latency_ms IS NOT NULL"]
+            query_params = {}
+
+            if start_date:
+                date_conditions.append("timestamp >= :start_dt")
+                query_params["start_dt"] = start_dt
+
+            if end_date:
+                date_conditions.append("timestamp <= :end_dt")
+                query_params["end_dt"] = end_dt
+
+            where_clause = " AND ".join(date_conditions)
+
+            percentile_query = text(f"""
                 SELECT
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) as p50,
                     percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) as p95,
                     percentile_cont(0.99) WITHIN GROUP (ORDER BY latency_ms) as p99
                 FROM query_logs
-                WHERE latency_ms IS NOT NULL
+                WHERE {where_clause}
             """)
-            if conditions:
-                # For simplicity, re-run with date filter in raw SQL if needed
-                pass
 
-            percentile_result = await db.execute(percentile_query)
+            percentile_result = await db.execute(percentile_query, query_params)
             percentiles = percentile_result.fetchone()
             p50 = percentiles[0] if percentiles else None
             p95 = percentiles[1] if percentiles else None
@@ -1458,14 +1469,17 @@ async def get_experiment_stats(experiment_id: str):
             if not experiment:
                 raise HTTPException(status_code=404, detail="Experiment not found")
 
-            # Get all results for this experiment
+            # Get all results for this experiment in a single query
+            # This eliminates the N+1 query pattern where we previously fetched
+            # feedback data separately for each variant in a loop
             results_query = select(ExperimentResult).where(
                 ExperimentResult.experiment_id == uuid.UUID(experiment_id)
             )
             results_result = await db.execute(results_query)
             results = results_result.scalars().all()
 
-            # Group results by variant
+            # Group results by variant and process all metrics including feedback
+            # in a single pass through the results (no additional queries needed)
             variant_data = {}
             for r in results:
                 if r.variant_id not in variant_data:
@@ -1473,29 +1487,23 @@ async def get_experiment_stats(experiment_id: str):
                         'metrics': [],
                         'conversions': 0,
                         'count': 0,
+                        'positive_feedback': 0,
+                        'negative_feedback': 0,
                     }
-                variant_data[r.variant_id]['metrics'].append(r.metric_value)
-                variant_data[r.variant_id]['count'] += 1
+
+                # Track feedback metrics separately from other metrics
+                if r.metric_name == 'feedback_positive' and r.metric_value > 0:
+                    variant_data[r.variant_id]['positive_feedback'] += 1
+                elif r.metric_name == 'feedback_negative' and r.metric_value > 0:
+                    variant_data[r.variant_id]['negative_feedback'] += 1
+                else:
+                    # Non-feedback metrics contribute to the metrics list
+                    variant_data[r.variant_id]['metrics'].append(r.metric_value)
+                    variant_data[r.variant_id]['count'] += 1
+
+                # Track conversions regardless of metric type
                 if r.metric_name == 'conversion' or (hasattr(r, 'is_conversion') and r.is_conversion):
                     variant_data[r.variant_id]['conversions'] += 1
-
-            # Get feedback data per variant
-            for variant_id in variant_data:
-                # Get positive/negative feedback counts from experiment results with feedback metrics
-                feedback_query = select(ExperimentResult).where(
-                    and_(
-                        ExperimentResult.experiment_id == uuid.UUID(experiment_id),
-                        ExperimentResult.variant_id == variant_id,
-                        ExperimentResult.metric_name.in_(['feedback_positive', 'feedback_negative'])
-                    )
-                )
-                feedback_result = await db.execute(feedback_query)
-                feedbacks = feedback_result.scalars().all()
-
-                positive = sum(1 for f in feedbacks if f.metric_name == 'feedback_positive' and f.metric_value > 0)
-                negative = sum(1 for f in feedbacks if f.metric_name == 'feedback_negative' and f.metric_value > 0)
-                variant_data[variant_id]['positive_feedback'] = positive
-                variant_data[variant_id]['negative_feedback'] = negative
 
             # Build variant stats
             variant_stats = []

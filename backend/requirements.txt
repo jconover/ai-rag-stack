@@ -112,7 +112,7 @@ passlib[bcrypt]>=1.7.4
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
-httpx>=0.25.2,<0.26.0  # For TestClient
+# httpx is already included in HTTP Clients section above (required by TestClient)
 
 # -----------------------------------------------------------------------------
 # Development (optional - uncomment if needed)
