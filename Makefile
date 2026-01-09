@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus backup backup-verify
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -32,6 +32,8 @@ help:
 	@echo "aider-deepseek-33b - Start Aider with deepseek-coder:33b (most powerful)"
 	@echo "grafana        - Open Grafana dashboards in browser"
 	@echo "prometheus     - Open Prometheus UI in browser"
+	@echo "backup         - Backup all databases (PostgreSQL, Qdrant, Redis)"
+	@echo "backup-verify  - Verify the latest backup integrity"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -224,3 +226,11 @@ clean-all: clean
 	@echo "Removing all data..."
 	rm -rf data/docs/*
 	@echo "Clean complete!"
+
+backup:
+	@echo "Backing up all databases..."
+	@bash scripts/backup_databases.sh
+
+backup-verify:
+	@echo "Verifying latest backup..."
+	@bash scripts/backup_databases.sh --verify

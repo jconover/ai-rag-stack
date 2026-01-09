@@ -61,38 +61,107 @@ class RetrievalResult:
 
 
 class RAGPipeline:
+    # Default context token budget (leaves room for system prompt, query, and response)
+    DEFAULT_MAX_CONTEXT_TOKENS = 4096
+
     def __init__(self):
         self.ollama_host = settings.ollama_host
         self.default_model = settings.ollama_default_model
-    
-    def _format_context(self, documents: List, web_context: str = "") -> str:
-        """Format retrieved documents into context string.
+
+    def _count_tokens(self, text: str) -> int:
+        """Estimate token count for a text string.
+
+        Uses a rough approximation of ~4 characters per token, which is
+        a reasonable estimate for English text with code snippets.
 
         Args:
-            documents: List of Document objects from vector store
-            web_context: Optional formatted web search results
+            text: The text to estimate tokens for
 
         Returns:
-            Combined context string for LLM
+            Estimated token count
         """
-        context_parts = []
+        return len(text) // 4
 
-        # Add local document context
+    def _format_context(
+        self,
+        documents: List,
+        web_context: str = "",
+        max_context_tokens: Optional[int] = None
+    ) -> str:
+        """Format retrieved documents into context string with optional truncation.
+
+        Args:
+            documents: List of Document objects from vector store (ordered by relevance)
+            web_context: Optional formatted web search results
+            max_context_tokens: Maximum tokens for context. If None, uses DEFAULT_MAX_CONTEXT_TOKENS.
+                               Documents are added in order of relevance until budget is exhausted.
+
+        Returns:
+            Combined context string for LLM, truncated to fit within token budget
+        """
+        if max_context_tokens is None:
+            max_context_tokens = self.DEFAULT_MAX_CONTEXT_TOKENS
+
+        context_parts = []
+        current_tokens = 0
+        separator = "\n---\n"
+        separator_tokens = self._count_tokens(separator)
+
+        # Reserve tokens for web context if present
+        web_context_tokens = 0
+        web_prefix = "\n\n--- Web Search Results ---\n\n"
+        if web_context:
+            web_context_tokens = self._count_tokens(web_prefix + web_context)
+
+        available_tokens = max_context_tokens - web_context_tokens
+
+        # Add local document context in order of relevance (higher-ranked first)
         for i, doc in enumerate(documents, 1):
             source = doc.metadata.get('source', 'Unknown')
             source_type = doc.metadata.get('source_type', 'Unknown')
             content = doc.page_content.strip()
 
-            context_parts.append(
-                f"[Source {i} - {source_type}]\n{content}\n"
-            )
+            doc_text = f"[Source {i} - {source_type}]\n{content}\n"
+            doc_tokens = self._count_tokens(doc_text)
 
-        local_context = "\n---\n".join(context_parts) if context_parts else ""
+            # Account for separator between documents
+            needed_tokens = doc_tokens
+            if context_parts:
+                needed_tokens += separator_tokens
+
+            # Check if adding this document would exceed the budget
+            if current_tokens + needed_tokens > available_tokens:
+                # Try to add a truncated version if we have room for at least some content
+                remaining_tokens = available_tokens - current_tokens
+                if context_parts:
+                    remaining_tokens -= separator_tokens
+
+                # Only truncate if we can include meaningful content (at least 50 tokens)
+                if remaining_tokens >= 50:
+                    # Estimate characters from tokens (reverse of _count_tokens)
+                    remaining_chars = remaining_tokens * 4
+                    header = f"[Source {i} - {source_type}]\n"
+                    content_budget = remaining_chars - len(header) - 20  # -20 for safety margin
+
+                    if content_budget > 100:
+                        truncated_content = content[:content_budget] + "..."
+                        doc_text = f"{header}{truncated_content}\n"
+                        context_parts.append(doc_text)
+                        logger.debug(
+                            f"Context truncation: Document {i} truncated to {content_budget} chars "
+                            f"(budget: {max_context_tokens} tokens)"
+                        )
+                break
+
+            context_parts.append(doc_text)
+            current_tokens += needed_tokens
+
+        local_context = separator.join(context_parts) if context_parts else ""
 
         # Add web search context if available
         if web_context:
             if local_context:
-                return f"{local_context}\n\n--- Web Search Results ---\n\n{web_context}"
+                return f"{local_context}{web_prefix}{web_context}"
             else:
                 return f"--- Web Search Results ---\n\n{web_context}"
 
@@ -359,6 +428,22 @@ Question: {query}"""
 
         return result
 
+    async def _retrieve_with_scores_async(self, query: str, model: str = None) -> RetrievalResult:
+        """Async wrapper for _retrieve_with_scores that runs in a thread pool executor.
+
+        This prevents CPU-bound operations (vector search, reranking) from blocking
+        the event loop in async contexts like FastAPI endpoints.
+
+        Args:
+            query: The search query string
+            model: The LLM model being used (for metrics logging)
+
+        Returns:
+            RetrievalResult with documents, scores, timing, and metadata
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._retrieve_with_scores, query, model)
+
     def _retrieve_with_metrics(
         self,
         query: str,
@@ -560,10 +645,10 @@ Question: {query}"""
         retrieval_result = RetrievalResult()
         context_str = ""
 
-        # Retrieve relevant context if RAG is enabled
+        # Retrieve relevant context if RAG is enabled (async to avoid blocking event loop)
         if use_rag:
             try:
-                retrieval_result = self._retrieve_with_scores(query, model)
+                retrieval_result = await self._retrieve_with_scores_async(query, model)
                 context_str = self._format_context(
                     retrieval_result.documents,
                     web_context=retrieval_result.web_search_context
@@ -693,10 +778,10 @@ Question: {query}"""
         retrieval_result = RetrievalResult()
         context_str = ""
 
-        # Retrieve relevant context if RAG is enabled
+        # Retrieve relevant context if RAG is enabled (async to avoid blocking event loop)
         if use_rag:
             try:
-                retrieval_result = self._retrieve_with_scores(query, model)
+                retrieval_result = await self._retrieve_with_scores_async(query, model)
                 context_str = self._format_context(
                     retrieval_result.documents,
                     web_context=retrieval_result.web_search_context
