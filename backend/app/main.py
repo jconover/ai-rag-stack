@@ -1,4 +1,5 @@
 """FastAPI application for DevOps AI Assistant"""
+import asyncio
 import uuid
 import os
 import subprocess
@@ -14,6 +15,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, desc
 from sqlalchemy.sql import text
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import redis
 import json
 
@@ -56,6 +60,13 @@ from app.auth import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Rate limiter - uses client IP for identification
+# Limits: 30 requests/minute for chat endpoints (expensive LLM calls)
+limiter = Limiter(key_func=get_remote_address)
+
+# Maximum query length to prevent OOM in embedding/LLM
+MAX_QUERY_LENGTH = 8000
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -101,6 +112,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rate limiting - protects expensive LLM endpoints from abuse
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Redis connection pool for conversation memory
 # Connection pooling improves performance by reusing connections instead of
@@ -361,6 +376,7 @@ async def health_check():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
+@limiter.limit("30/minute")
 async def chat(
     request: ChatRequest,
     req: Request,
@@ -370,7 +386,15 @@ async def chat(
 
     Optionally authenticates the user to associate queries with their account.
     Works with or without authentication.
+
+    Rate limited to 30 requests per minute per IP address.
     """
+    # Validate query length to prevent OOM
+    if len(request.message) > MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
+        )
 
     # Generate or use provided session ID
     session_id = request.session_id or str(uuid.uuid4())
@@ -421,16 +445,17 @@ async def chat(
         # Save assistant response
         save_message(session_id, "assistant", result['response'])
 
-        # Log query to PostgreSQL (async, non-blocking)
+        # Log query to PostgreSQL (fire-and-forget, non-blocking)
+        # Uses create_task to avoid blocking response on DB write
         if settings.query_logging_enabled:
-            await log_query_to_postgres(
+            asyncio.create_task(log_query_to_postgres(
                 session_id=session_id,
                 query=request.message,
                 model=result['model'],
                 result=result,
                 total_time_ms=total_time_ms,
                 user_id=user_id,
-            )
+            ))
 
         # Record experiment metrics if in an active experiment
         if experiment_id and variant_name:
@@ -455,8 +480,18 @@ async def chat(
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """Stream chat responses from the AI assistant"""
+@limiter.limit("30/minute")
+async def chat_stream(request: ChatRequest, req: Request):
+    """Stream chat responses from the AI assistant.
+
+    Rate limited to 30 requests per minute per IP address.
+    """
+    # Validate query length to prevent OOM
+    if len(request.message) > MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
+        )
 
     # Generate or use provided session ID
     session_id = request.session_id or str(uuid.uuid4())

@@ -333,10 +333,16 @@ class VectorStore:
     DENSE_VECTOR_NAME = "dense"
     SPARSE_VECTOR_NAME = "sparse"
 
+    # BGE models benefit from query instruction prefix for better retrieval
+    BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
+
     def __init__(self):
+        # Use gRPC for better performance (lower latency, higher throughput)
         self.client = QdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
+            grpc_port=6334,
+            prefer_grpc=True,
             timeout=30,  # 30 second timeout for operations
         )
         self.embeddings = HuggingFaceEmbeddings(
@@ -440,6 +446,8 @@ class VectorStore:
         on repeated queries. Falls back to direct embedding generation
         if cache is unavailable.
 
+        For BGE models, adds instruction prefix for improved retrieval (+5-10%).
+
         Returns EmbeddingResult with the vector and cache_hit status.
         """
         cached = _embedding_cache.get(query)
@@ -447,8 +455,13 @@ class VectorStore:
             return EmbeddingResult(vector=cached, cache_hit=True)
 
         # Cache miss - generate embedding
-        vector = self.embeddings.embed_query(query)
-        _embedding_cache.put(query, vector)
+        # Add BGE instruction prefix for better retrieval quality
+        embed_query = query
+        if 'bge' in settings.embedding_model.lower():
+            embed_query = f"{self.BGE_QUERY_INSTRUCTION}{query}"
+
+        vector = self.embeddings.embed_query(embed_query)
+        _embedding_cache.put(query, vector)  # Cache with original query as key
         return EmbeddingResult(vector=vector, cache_hit=False)
 
     def get_embedding_cache_stats(self) -> Dict[str, Any]:
