@@ -494,11 +494,11 @@ class QueryLog(Base):
         comment="Whether web search fallback was triggered",
     )
 
-    # Additional metadata as JSONB for flexibility
-    metadata: Mapped[Optional[dict]] = mapped_column(
+    # Additional data as JSONB for flexibility
+    extra_data: Mapped[Optional[dict]] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Additional metadata (retrieval metrics, etc.)",
+        comment="Additional data (retrieval metrics, etc.)",
     )
 
     # Timestamps
@@ -716,11 +716,11 @@ class IngestionRegistry(Base):
         comment="Time taken to ingest this file in milliseconds",
     )
 
-    # Processing metadata as JSONB for flexibility
-    metadata: Mapped[Optional[dict]] = mapped_column(
+    # Processing data as JSONB for flexibility
+    extra_data: Mapped[Optional[dict]] = mapped_column(
         JSONB,
         nullable=True,
-        comment="Additional metadata: embedding model, chunk settings, etc.",
+        comment="Additional data: embedding model, chunk settings, etc.",
     )
 
     # Composite indexes for common query patterns

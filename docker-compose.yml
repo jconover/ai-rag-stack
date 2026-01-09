@@ -39,10 +39,6 @@ services:
       - QDRANT__SERVICE__MAX_SEARCH_THREADS=4
       # Storage optimization: enable mmap for large collections
       - QDRANT__STORAGE__MMAP_ADVICE=random
-      # HNSW index optimization: parallel index building
-      - QDRANT__STORAGE__OPTIMIZERS__INDEXING_THRESHOLD=20000
-      # Memory management: limit segment size for faster updates
-      - QDRANT__STORAGE__OPTIMIZERS__MAX_SEGMENT_SIZE=200000
       # Enable WAL for durability with good performance
       - QDRANT__STORAGE__WAL__WAL_CAPACITY_MB=64
     deploy:
@@ -96,7 +92,10 @@ services:
 
   # Backend API - FastAPI with RAG pipeline
   backend:
-    image: jconover/ai-rag-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # image: jconover/ai-rag-backend:latest  # Uncomment to use Docker Hub image
     container_name: rag-backend
     ports:
       - "8000:8000"

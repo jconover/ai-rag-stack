@@ -960,16 +960,22 @@ class VectorStore:
         try:
             collection_info = self.client.get_collection(self.collection_name)
 
-            # Get optimizer status
+            # Get optimizer status (handle API differences between qdrant-client versions)
             optimizer_status = "unknown"
             if collection_info.optimizer_status:
-                optimizer_status = str(collection_info.optimizer_status.status)
+                # Try different attribute patterns for different API versions
+                optimizer_status = str(getattr(collection_info.optimizer_status, 'status', None) or
+                                       getattr(collection_info.optimizer_status, '__root__', None) or
+                                       collection_info.optimizer_status)
+
+            # Note: newer qdrant-client versions use indexed_vectors_count instead of vectors_count
+            indexed_vectors = getattr(collection_info, 'indexed_vectors_count', None) or 0
 
             return {
                 "collection_name": self.collection_name,
-                "vectors_count": collection_info.vectors_count or 0,
+                "vectors_count": indexed_vectors,
                 "points_count": collection_info.points_count or 0,
-                "indexed_vectors_count": getattr(collection_info, 'indexed_vectors_count', None) or 0,
+                "indexed_vectors_count": indexed_vectors,
                 "optimizer_status": optimizer_status,
                 "status": str(collection_info.status),
                 "config": {
