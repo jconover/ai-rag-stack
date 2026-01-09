@@ -100,6 +100,38 @@ pull-codellama:
 list-models:
 	docker exec ollama ollama list
 
+list-available-models:
+	@echo "=============================================="
+	@echo "  Popular Ollama Models (use: make pull-model MODEL=<name>)"
+	@echo "=============================================="
+	@echo ""
+	@echo "General Purpose:"
+	@echo "  llama3.1:8b        - Meta Llama 3.1 8B (default, good balance)"
+	@echo "  llama3.1:70b       - Meta Llama 3.1 70B (powerful, needs ~40GB RAM)"
+	@echo "  llama3.2:3b        - Meta Llama 3.2 3B (fast, lightweight)"
+	@echo "  mistral:7b         - Mistral 7B (fast, efficient)"
+	@echo "  mixtral:8x7b       - Mixtral 8x7B MoE (powerful)"
+	@echo "  gemma2:9b          - Google Gemma 2 9B"
+	@echo "  gemma2:27b         - Google Gemma 2 27B"
+	@echo "  phi3:mini          - Microsoft Phi-3 Mini (3.8B)"
+	@echo "  phi3:medium        - Microsoft Phi-3 Medium (14B)"
+	@echo ""
+	@echo "Coding Models:"
+	@echo "  qwen2.5-coder:7b   - Qwen 2.5 Coder 7B (excellent for code)"
+	@echo "  qwen2.5-coder:32b  - Qwen 2.5 Coder 32B (best coding model)"
+	@echo "  codellama:7b       - Meta Code Llama 7B"
+	@echo "  codellama:13b      - Meta Code Llama 13B"
+	@echo "  deepseek-coder:6.7b    - DeepSeek Coder 6.7B"
+	@echo "  deepseek-coder-v2:16b  - DeepSeek Coder V2 16B (236B MoE)"
+	@echo ""
+	@echo "Reasoning Models:"
+	@echo "  kimi-k2:latest     - Moonshot Kimi K2 (MoE, strong reasoning)"
+	@echo "  kimi-k2:instruct   - Moonshot Kimi K2 Instruct"
+	@echo ""
+	@echo "Browse all models: https://ollama.com/library"
+	@echo "Search models:     https://ollama.com/search"
+	@echo ""
+
 ingest: download-docs
 	@echo "Ingesting documentation into vector database..."
 	docker exec rag-backend python /scripts/ingest_docs.py
