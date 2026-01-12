@@ -69,3 +69,6 @@ models/
 
 # Claude Code (keep agents, ignore personal settings)
 .claude/settings.local.json
+.claude/*
+.claude/*/*
+

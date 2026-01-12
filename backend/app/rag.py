@@ -340,6 +340,36 @@ Question: {query}"""
                         f"scores=[{rerank_preview}]"
                     )
 
+                # Filter out documents with rerank scores below min_rerank_score threshold
+                filtered_docs = []
+                filtered_sim_scores = []
+                filtered_rerank_scores = []
+                for doc, sim_score, rerank_score in zip(documents, similarity_scores, rerank_scores):
+                    if rerank_score >= settings.min_rerank_score:
+                        filtered_docs.append(doc)
+                        filtered_sim_scores.append(sim_score)
+                        filtered_rerank_scores.append(rerank_score)
+
+                # Handle edge case: if all results filtered out, keep at least the top result
+                if not filtered_docs and documents:
+                    filtered_docs = [documents[0]]
+                    filtered_sim_scores = [similarity_scores[0]]
+                    filtered_rerank_scores = [rerank_scores[0]]
+                    logger.warning(
+                        f"All {len(documents)} results filtered by min_rerank_score={settings.min_rerank_score}, "
+                        f"keeping top result with score={rerank_scores[0]:.4f}"
+                    )
+                elif len(filtered_docs) < len(documents):
+                    filtered_count = len(documents) - len(filtered_docs)
+                    if settings.log_retrieval_details:
+                        logger.info(
+                            f"Filtered {filtered_count} results below min_rerank_score={settings.min_rerank_score}"
+                        )
+
+                documents = filtered_docs
+                similarity_scores = filtered_sim_scores
+                result.rerank_scores = filtered_rerank_scores
+
             except Exception as e:
                 result.rerank_error = str(e)
                 logger.error(f"Reranking failed: {e}, using original order")
