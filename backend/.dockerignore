@@ -30,10 +30,10 @@ ENV
 .python-version
 
 # -----------------------------------------------------------------------------
-# Testing
+# Testing (keep tests/ and pytest.ini for in-container testing)
 # -----------------------------------------------------------------------------
-tests/
-pytest.ini
+# tests/  # Included for testing
+# pytest.ini  # Included for testing
 .pytest_cache
 .coverage
 htmlcov

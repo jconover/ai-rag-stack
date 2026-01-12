@@ -40,9 +40,9 @@ COPY requirements.txt .
 # This must be done before requirements.txt to override the torch version
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install production dependencies (exclude dev/test packages)
-# Filter out testing dependencies to reduce image size
-RUN grep -v -E '^(pytest|black|ruff|mypy|pre-commit)' requirements.txt > requirements-prod.txt && \
+# Install dependencies (exclude dev-only packages, keep pytest for testing)
+# Filter out linting/formatting tools but keep testing dependencies
+RUN grep -v -E '^(black|ruff|mypy|pre-commit)' requirements.txt > requirements-prod.txt && \
     pip install --no-cache-dir -r requirements-prod.txt
 
 # Download spaCy English model for semantic chunking
@@ -52,17 +52,12 @@ RUN python -m spacy download en_core_web_sm
 # Download NLTK data for text processing
 RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)"
 
-# Clean up unnecessary files from installed packages
+# Clean up unnecessary files from installed packages (keep pip for testing)
 RUN find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
     find /opt/venv -type f -name "*.pyc" -delete 2>/dev/null || true && \
     find /opt/venv -type f -name "*.pyo" -delete 2>/dev/null || true && \
     find /opt/venv -type f -name "*.c" -delete 2>/dev/null || true && \
-    find /opt/venv -type f -name "*.h" -delete 2>/dev/null || true && \
-    rm -rf /opt/venv/lib/python3.11/site-packages/pip* && \
-    rm -rf /opt/venv/lib/python3.11/site-packages/setuptools* && \
-    rm -rf /opt/venv/lib/python3.11/site-packages/wheel*
+    find /opt/venv -type f -name "*.h" -delete 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal production image
@@ -102,9 +97,10 @@ RUN mkdir -p /home/appuser/nltk_data && \
     cp -r /root/nltk_data/* /home/appuser/nltk_data/ && \
     rm -rf /root/nltk_data
 
-# Copy only application code (not tests, not dev files)
-# The .dockerignore already excludes __pycache__, .pyc, tests, etc.
+# Copy application code and tests
 COPY --chown=appuser:appuser app/ ./app/
+COPY --chown=appuser:appuser tests/ ./tests/
+COPY --chown=appuser:appuser pytest.ini ./
 
 # Set ownership of nltk_data
 RUN chown -R appuser:appuser /home/appuser/nltk_data

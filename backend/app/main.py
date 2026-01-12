@@ -886,8 +886,8 @@ async def _check_reranker() -> ReadinessCheck:
 @app.post("/api/chat", response_model=ChatResponse)
 @limiter.limit("30/minute")
 async def chat(
-    request: ChatRequest,
-    req: Request,
+    chat_request: ChatRequest,
+    request: Request,
     current_user: Optional[User] = Depends(get_optional_user),
 ):
     """Chat with the AI assistant.
@@ -898,14 +898,14 @@ async def chat(
     Rate limited to 30 requests per minute per IP address.
     """
     # Validate query length to prevent OOM
-    if len(request.message) > MAX_QUERY_LENGTH:
+    if len(chat_request.message) > MAX_QUERY_LENGTH:
         raise HTTPException(
             status_code=400,
             detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
         )
 
     # Generate or use provided session ID
-    session_id = request.session_id or str(uuid.uuid4())
+    session_id = chat_request.session_id or str(uuid.uuid4())
 
     # Track user_id for authenticated requests
     user_id = str(current_user.id) if current_user else None
@@ -915,7 +915,7 @@ async def chat(
     conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
 
     # Save user message
-    save_message(session_id, "user", request.message)
+    save_message(session_id, "user", chat_request.message)
 
     # Track timing for query logging
     start_time = time.time()
@@ -933,10 +933,10 @@ async def chat(
             variant_cfg = experiment_config.get("config", {})
 
             # Apply experiment variant settings (only if not explicitly set in request)
-            if request.model is None and "model" in variant_cfg:
-                request.model = variant_cfg["model"]
-            if request.temperature is None and "temperature" in variant_cfg:
-                request.temperature = variant_cfg["temperature"]
+            if chat_request.model is None and "model" in variant_cfg:
+                chat_request.model = variant_cfg["model"]
+            if chat_request.temperature is None and "temperature" in variant_cfg:
+                chat_request.temperature = variant_cfg["temperature"]
     except Exception as e:
         logger.warning(f"Failed to get experiment config: {e}")
         # Continue without experiment - graceful degradation
@@ -944,11 +944,11 @@ async def chat(
     try:
         # Generate response with conversation history for context-aware retrieval
         result = await rag_pipeline.generate_response(
-            query=request.message,
-            model=request.model,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            use_rag=request.use_rag,
+            query=chat_request.message,
+            model=chat_request.model,
+            temperature=chat_request.temperature,
+            max_tokens=chat_request.max_tokens,
+            use_rag=chat_request.use_rag,
             conversation_history=conversation_history,
         )
 
@@ -960,19 +960,19 @@ async def chat(
 
         # Store analytics data on request state for middleware to capture
         if settings.analytics_enabled:
-            req.state.analytics_model = result['model']
-            req.state.analytics_query = request.message
+            request.state.analytics_model = result['model']
+            request.state.analytics_query = chat_request.message
             retrieval_metrics = result.get('retrieval_metrics', {})
             if retrieval_metrics:
-                req.state.analytics_cache_hit = retrieval_metrics.get('embedding_cache_hit')
-                req.state.analytics_avg_score = retrieval_metrics.get('avg_similarity_score')
+                request.state.analytics_cache_hit = retrieval_metrics.get('embedding_cache_hit')
+                request.state.analytics_avg_score = retrieval_metrics.get('avg_similarity_score')
 
         # Log query to PostgreSQL (fire-and-forget, non-blocking)
         # Uses create_task to avoid blocking response on DB write
         if settings.query_logging_enabled:
             asyncio.create_task(log_query_to_postgres(
                 session_id=session_id,
-                query=request.message,
+                query=chat_request.message,
                 model=result['model'],
                 result=result,
                 total_time_ms=total_time_ms,
@@ -1003,45 +1003,45 @@ async def chat(
 
 @app.post("/api/chat/stream")
 @limiter.limit("30/minute")
-async def chat_stream(request: ChatRequest, req: Request):
+async def chat_stream(chat_request: ChatRequest, request: Request):
     """Stream chat responses from the AI assistant.
 
     Rate limited to 30 requests per minute per IP address.
     """
     # Validate query length to prevent OOM
-    if len(request.message) > MAX_QUERY_LENGTH:
+    if len(chat_request.message) > MAX_QUERY_LENGTH:
         raise HTTPException(
             status_code=400,
             detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
         )
 
     # Generate or use provided session ID
-    session_id = request.session_id or str(uuid.uuid4())
+    session_id = chat_request.session_id or str(uuid.uuid4())
 
     # Get conversation history BEFORE saving the current message
     # This is used for context-aware retrieval to resolve pronouns/references
     conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
 
     # Save user message
-    save_message(session_id, "user", request.message)
+    save_message(session_id, "user", chat_request.message)
 
     # Track start time for analytics
     stream_start_time = time.time()
 
     async def generate():
         full_response = ""
-        model_used = request.model or settings.ollama_default_model
+        model_used = chat_request.model or settings.ollama_default_model
         cache_hit = None
         avg_score = None
         is_error = False
 
         try:
             async for chunk in rag_pipeline.generate_response_stream(
-                query=request.message,
-                model=request.model,
-                temperature=request.temperature,
-                max_tokens=request.max_tokens,
-                use_rag=request.use_rag,
+                query=chat_request.message,
+                model=chat_request.model,
+                temperature=chat_request.temperature,
+                max_tokens=chat_request.max_tokens,
+                use_rag=chat_request.use_rag,
                 conversation_history=conversation_history,
             ):
                 # Accumulate response content
@@ -1084,7 +1084,7 @@ async def chat_stream(request: ChatRequest, req: Request):
                     endpoint="/api/chat/stream",
                     cache_hit=cache_hit,
                     avg_similarity_score=avg_score,
-                    query=request.message,
+                    query=chat_request.message,
                 )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
