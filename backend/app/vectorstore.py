@@ -18,6 +18,7 @@ import logging
 import hashlib
 import json
 import re
+import threading
 import redis
 
 from app.circuit_breaker import (
@@ -55,8 +56,55 @@ except ImportError:
     from langchain.schema import Document
 
 from app.config import settings
+from app.device_utils import get_optimal_device, get_actual_embedding_device
 
 logger = logging.getLogger(__name__)
+
+# Thread-safe singleton for shared embedding model
+# This reduces memory usage in multi-worker deployments (e.g., gunicorn, uvicorn workers)
+# where each worker would otherwise load its own copy of the model (~400MB for BGE-base)
+_embedding_model = None
+_embedding_lock = threading.Lock()
+
+
+def get_shared_embeddings() -> HuggingFaceEmbeddings:
+    """Get or create shared embedding model instance (thread-safe singleton).
+
+    This function implements the double-checked locking pattern to ensure:
+    1. Thread-safety: Only one thread initializes the model
+    2. Efficiency: After initialization, no lock acquisition needed
+    3. Memory savings: All workers share the same model instance
+
+    In multi-worker deployments (gunicorn/uvicorn with multiple workers),
+    each process still has its own model, but within a process, all threads
+    and coroutines share the same instance.
+
+    Returns:
+        HuggingFaceEmbeddings: The shared embedding model instance
+    """
+    global _embedding_model
+    if _embedding_model is None:
+        with _embedding_lock:
+            # Double-check inside lock to prevent race conditions
+            if _embedding_model is None:
+                # Resolve device with auto-detection and fallback
+                actual_device = get_actual_embedding_device()
+                logger.info(
+                    f"Initializing shared embedding model: {settings.embedding_model} "
+                    f"(configured: {settings.embedding_device}, actual: {actual_device})"
+                )
+                _embedding_model = HuggingFaceEmbeddings(
+                    model_name=settings.embedding_model,
+                    model_kwargs={'device': actual_device}
+                )
+                # Warmup the model to eliminate first-query cold-start latency
+                _embedding_model.embed_query("warmup")
+                logger.info(
+                    f"Shared embedding model initialized successfully "
+                    f"(model: {settings.embedding_model}, device: {actual_device}, dim: {settings.embedding_dimension})"
+                )
+    return _embedding_model
+
 
 # Sparse encoder for hybrid search (lazy loaded)
 _sparse_encoder = None
@@ -387,12 +435,9 @@ class VectorStore:
             prefer_grpc=True,
             timeout=30,  # 30 second timeout for operations
         )
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=settings.embedding_model,
-            model_kwargs={'device': settings.embedding_device}
-        )
-        # Warmup the embedding model to eliminate first-query cold-start latency
-        self.embeddings.embed_query("warmup")
+        # Use shared embedding model singleton to reduce memory in multi-worker deployments
+        # The model is lazily initialized and warmed up on first access
+        self.embeddings = get_shared_embeddings()
         self.collection_name = settings.qdrant_collection_name
         self._ensure_collection()
         self._ensure_payload_indexes()

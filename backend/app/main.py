@@ -29,7 +29,7 @@ from app.models import (
     FeedbackRequest, FeedbackResponse, RedisPoolStats,
     PostgresPoolStats, QueryLogEntry, QueryLogsResponse,
     QueryAnalyticsSummary,
-    CircuitBreakerStatus, CircuitBreakersStatus,
+    CircuitBreakerStatus, CircuitBreakersStatus, DeviceInfo,
     # A/B Testing models
     ExperimentCreate, ExperimentUpdate, ExperimentResponse,
     ExperimentListResponse, ExperimentStatsResponse,
@@ -76,6 +76,10 @@ from app.circuit_breaker import (
     reset_all_circuit_breakers,
 )
 from app.analytics import get_metrics_collector, MetricsCollector
+from app.device_utils import (
+    get_device_info, log_device_configuration,
+    get_actual_embedding_device, get_actual_reranker_device,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +212,12 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
     logger.info("Initializing DevOps AI Assistant API...")
+
+    # Log ML device configuration (GPU detection)
+    try:
+        log_device_configuration()
+    except Exception as e:
+        logger.warning(f"Failed to log device configuration: {e}")
 
     # Initialize OpenTelemetry tracing (if enabled)
     try:
@@ -536,6 +546,17 @@ async def health_check():
         tavily=_build_circuit_breaker_status("tavily", cb_states.get("tavily", {})),
     )
 
+    # Get ML device information
+    device_info_dict = get_device_info()
+    device_info_response = DeviceInfo(
+        embedding_device=get_actual_embedding_device(),
+        reranker_device=get_actual_reranker_device() if reranker_status.get('enabled') else None,
+        cuda_available=device_info_dict.get("cuda_available", False),
+        cuda_device_name=device_info_dict.get("cuda_device_name"),
+        mps_available=device_info_dict.get("mps_available", False),
+        pytorch_available=device_info_dict.get("pytorch_available", True),
+    )
+
     # Core services must be connected for healthy status
     # PostgreSQL is optional - not required for core functionality
     core_healthy = all([ollama_connected, qdrant_connected, redis_connected])
@@ -566,6 +587,7 @@ async def health_check():
         reranker_enabled=reranker_status.get('enabled', False),
         reranker_loaded=reranker_status.get('loaded', False),
         reranker_model=reranker_status.get('model_name'),
+        device_info=device_info_response,
         redis_pool=redis_pool_stats,
         postgres_pool=postgres_pool_stats,
         circuit_breakers=circuit_breakers_status,

@@ -29,8 +29,10 @@ class Settings(BaseSettings):
     top_k_results: int = int(os.getenv("TOP_K_RESULTS", 5))
     context_window: int = int(os.getenv("CONTEXT_WINDOW", 4096))
 
-    # Embeddings - set to 'cuda' for GPU acceleration (5-10x faster)
-    embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
+    # Embeddings - device for running embedding model
+    # Options: "auto" (recommended), "cuda" (NVIDIA GPU), "mps" (Apple Silicon), "cpu"
+    # "auto" will detect and use the best available GPU, falling back to CPU
+    embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")
     # Embedding model - BAAI/bge-base-en-v1.5 offers +10-15% retrieval quality over all-MiniLM-L6-v2
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
     # Embedding dimension - must match the model (bge-base-en-v1.5: 768, all-MiniLM-L6-v2: 384)
@@ -43,7 +45,8 @@ class Settings(BaseSettings):
     # Reranker - Cross-encoder for improved retrieval quality
     reranker_enabled: bool = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
     reranker_model: str = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-    reranker_device: str = os.getenv("RERANKER_DEVICE", "cpu")
+    # Reranker device - Options: "auto" (recommended), "cuda", "mps", "cpu"
+    reranker_device: str = os.getenv("RERANKER_DEVICE", "auto")
     reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", 5))  # Final results after reranking
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", 20))  # Initial retrieval before reranking
 
@@ -71,6 +74,9 @@ class Settings(BaseSettings):
     conversation_context_history_limit: int = int(os.getenv("CONVERSATION_CONTEXT_HISTORY_LIMIT", "3"))
     conversation_context_min_query_length: int = int(os.getenv("CONVERSATION_CONTEXT_MIN_QUERY_LENGTH", "5"))
     conversation_context_max_terms: int = int(os.getenv("CONVERSATION_CONTEXT_MAX_TERMS", "10"))
+
+    # Few-shot learning - include domain-specific examples to improve output consistency and formatting
+    few_shot_enabled: bool = os.getenv("FEW_SHOT_ENABLED", "true").lower() == "true"
 
     # Web Search Fallback (Tavily) - triggers when local retrieval scores are low
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"

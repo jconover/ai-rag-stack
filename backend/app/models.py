@@ -124,6 +124,16 @@ class CircuitBreakersStatus(BaseModel):
     tavily: CircuitBreakerStatus = Field(..., description="Tavily web search circuit breaker")
 
 
+class DeviceInfo(BaseModel):
+    """ML device configuration and availability"""
+    embedding_device: str = Field(..., description="Actual device used for embeddings (cuda/mps/cpu)")
+    reranker_device: Optional[str] = Field(None, description="Actual device used for reranker (cuda/mps/cpu)")
+    cuda_available: bool = Field(False, description="Whether NVIDIA CUDA is available")
+    cuda_device_name: Optional[str] = Field(None, description="NVIDIA GPU name if available")
+    mps_available: bool = Field(False, description="Whether Apple Silicon MPS is available")
+    pytorch_available: bool = Field(True, description="Whether PyTorch is installed")
+
+
 class HealthResponse(BaseModel):
     status: str
     ollama_connected: bool
@@ -133,6 +143,7 @@ class HealthResponse(BaseModel):
     reranker_enabled: bool = Field(False, description="Whether reranker is enabled")
     reranker_loaded: bool = Field(False, description="Whether reranker model is loaded")
     reranker_model: Optional[str] = Field(None, description="Reranker model name")
+    device_info: Optional[DeviceInfo] = Field(None, description="ML device configuration and GPU availability")
     redis_pool: Optional[RedisPoolStats] = Field(None, description="Redis connection pool statistics")
     postgres_pool: Optional[PostgresPoolStats] = Field(None, description="PostgreSQL connection pool statistics")
     circuit_breakers: Optional[CircuitBreakersStatus] = Field(None, description="Circuit breaker status for resilience")

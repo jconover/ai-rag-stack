@@ -37,6 +37,184 @@ from app.tracing import get_tracer, create_span, SpanAttributes
 logger = logging.getLogger(__name__)
 
 
+# Few-shot examples for domain-specific response formatting
+# Each example demonstrates the expected output format with code blocks, source citations, and structure
+FEW_SHOT_EXAMPLES = {
+    "kubernetes": {
+        "query": "How do I check pod logs?",
+        "context": "kubectl logs retrieves container logs. Use -f for streaming, --previous for crashed containers.",
+        "response": """To check pod logs in Kubernetes:
+
+```bash
+# Basic log retrieval
+kubectl logs <pod-name>
+
+# Stream logs in real-time
+kubectl logs -f <pod-name>
+
+# View logs from previous container instance (useful for crashed pods)
+kubectl logs --previous <pod-name>
+
+# For multi-container pods, specify the container
+kubectl logs <pod-name> -c <container-name>
+```
+
+[Source 1] The `-f` flag follows the log output similar to `tail -f`."""
+    },
+    "docker": {
+        "query": "How do I build a Docker image?",
+        "context": "docker build creates images from Dockerfiles. Use -t for tagging.",
+        "response": """To build a Docker image:
+
+```bash
+# Build from current directory
+docker build -t myimage:latest .
+
+# Build with specific Dockerfile
+docker build -f Dockerfile.prod -t myimage:prod .
+
+# Build with build arguments
+docker build --build-arg VERSION=1.0 -t myimage:1.0 .
+```
+
+[Source 1] Always tag images with meaningful versions for traceability."""
+    },
+    "terraform": {
+        "query": "How do I initialize Terraform?",
+        "context": "terraform init initializes working directory, downloads providers.",
+        "response": """To initialize a Terraform project:
+
+```bash
+# Initialize the working directory
+terraform init
+
+# Upgrade providers to latest versions
+terraform init -upgrade
+
+# Reconfigure backend
+terraform init -reconfigure
+```
+
+[Source 1] Run `terraform init` whenever you add new providers or modules."""
+    },
+    "ansible": {
+        "query": "How do I run an Ansible playbook?",
+        "context": "ansible-playbook runs playbooks against inventory hosts. Use -i for inventory, --check for dry run.",
+        "response": """To run an Ansible playbook:
+
+```bash
+# Run playbook with default inventory
+ansible-playbook playbook.yml
+
+# Specify custom inventory file
+ansible-playbook -i inventory.ini playbook.yml
+
+# Dry run (check mode) - shows changes without applying
+ansible-playbook playbook.yml --check
+
+# Run with extra variables
+ansible-playbook playbook.yml -e "env=production"
+```
+
+[Source 1] Use `--check` mode to preview changes before applying them."""
+    },
+    "helm": {
+        "query": "How do I install a Helm chart?",
+        "context": "helm install deploys charts to Kubernetes. Use -f for custom values, --namespace for target namespace.",
+        "response": """To install a Helm chart:
+
+```bash
+# Install chart with release name
+helm install my-release bitnami/nginx
+
+# Install with custom values file
+helm install my-release bitnami/nginx -f values.yaml
+
+# Install in specific namespace
+helm install my-release bitnami/nginx --namespace production --create-namespace
+
+# Install with inline value overrides
+helm install my-release bitnami/nginx --set replicaCount=3
+```
+
+[Source 1] Use `-f values.yaml` to customize chart configuration."""
+    },
+    "cicd": {
+        "query": "How do I set up a GitHub Actions workflow?",
+        "context": "GitHub Actions workflows are defined in .github/workflows/*.yml. Jobs run in parallel by default.",
+        "response": """To set up a GitHub Actions workflow:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          npm install
+          npm test
+```
+
+[Source 1] Workflows trigger on events like `push` and `pull_request`."""
+    },
+}
+
+# Keyword patterns for detecting domain from query
+# Maps keyword patterns to few-shot example keys
+FEW_SHOT_DOMAIN_PATTERNS = [
+    # Kubernetes
+    (["kubernetes", "k8s", "kubectl", "pod", "deployment", "service", "ingress", "namespace", "configmap", "secret", "pvc", "pv", "statefulset", "daemonset", "replicaset"], "kubernetes"),
+    # Docker
+    (["docker", "dockerfile", "container", "image", "docker-compose", "docker compose"], "docker"),
+    # Terraform
+    (["terraform", "tf", "hcl", "tfstate", "tfvars", "provider", "resource", "module"], "terraform"),
+    # Ansible
+    (["ansible", "playbook", "ansible-playbook", "inventory", "role", "task", "handler", "ansible-vault"], "ansible"),
+    # Helm
+    (["helm", "chart", "values.yaml", "helmfile", "helm install", "helm upgrade"], "helm"),
+    # CI/CD
+    (["github actions", "gitlab ci", "jenkins", "pipeline", "workflow", "ci/cd", "cicd", "build pipeline", "deploy pipeline"], "cicd"),
+]
+
+
+def select_few_shot_example(query: str) -> Optional[Dict[str, str]]:
+    """Select a relevant few-shot example based on query content.
+
+    Analyzes the query for domain-specific keywords and returns
+    a matching example if found. Used to improve output consistency
+    by providing the LLM with a formatting reference.
+
+    Args:
+        query: The user's question/query string
+
+    Returns:
+        Dictionary with 'query', 'context', 'response' keys if a relevant
+        example is found, None otherwise.
+    """
+    query_lower = query.lower()
+
+    for keywords, domain in FEW_SHOT_DOMAIN_PATTERNS:
+        for keyword in keywords:
+            if keyword in query_lower:
+                example = FEW_SHOT_EXAMPLES.get(domain)
+                if example:
+                    if settings.log_retrieval_details:
+                        logger.info(f"Selected few-shot example for domain: {domain} (matched: '{keyword}')")
+                    return example
+
+    return None
+
+
 @dataclass
 class RetrievalResult:
     """Container for retrieval results with scores and performance metrics."""
@@ -352,18 +530,38 @@ Question: {query}"""
     def _build_messages(self, query: str, context: str, model: Optional[str] = None) -> List[Dict[str, str]]:
         """Build messages list with proper system/user role separation.
 
+        Optionally includes few-shot examples as user/assistant message pairs
+        to improve output consistency and formatting. Examples are selected
+        based on domain-specific keywords in the query.
+
         Args:
             query: The user's question
             context: Formatted context from retrieved documents
             model: The model name for selecting the appropriate system prompt
 
         Returns:
-            List of message dictionaries with system and user roles
+            List of message dictionaries with system, user, and optional assistant roles
         """
-        return [
+        messages = [
             {'role': 'system', 'content': self._get_system_prompt(model)},
-            {'role': 'user', 'content': self._get_user_prompt(query, context)}
         ]
+
+        # Add few-shot example if enabled and relevant example found
+        if settings.few_shot_enabled:
+            example = select_few_shot_example(query)
+            if example:
+                # Build example user prompt in same format as real queries
+                example_user_prompt = self._get_user_prompt(
+                    query=example['query'],
+                    context=example['context']
+                )
+                messages.append({'role': 'user', 'content': example_user_prompt})
+                messages.append({'role': 'assistant', 'content': example['response']})
+
+        # Add actual user query
+        messages.append({'role': 'user', 'content': self._get_user_prompt(query, context)})
+
+        return messages
     
     def _retrieve_with_scores(
         self,

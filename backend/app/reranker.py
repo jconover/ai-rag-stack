@@ -11,6 +11,7 @@ Typical usage:
 """
 
 import logging
+import threading
 from typing import List, Optional, Tuple
 
 import torch
@@ -22,6 +23,7 @@ except ImportError:
     from langchain.schema import Document
 
 from app.config import settings
+from app.device_utils import get_optimal_device, get_actual_reranker_device
 
 logger = logging.getLogger(__name__)
 
@@ -50,25 +52,26 @@ class Reranker:
         Args:
             model_name: HuggingFace model name for the cross-encoder.
                        Defaults to settings.reranker_model.
-            device: Device to run inference on ('cpu' or 'cuda').
+            device: Device to run inference on ('cpu', 'cuda', 'mps', or 'auto').
                    Defaults to settings.reranker_device.
             batch_size: Batch size for processing multiple query-document pairs.
         """
         self.model_name = model_name or settings.reranker_model
         self.batch_size = batch_size
 
-        # Determine device
+        # Determine device using auto-detection with graceful fallback
         requested_device = device or settings.reranker_device
-        if requested_device == "cuda" and not torch.cuda.is_available():
+        self.device = get_optimal_device(requested_device)
+
+        if requested_device not in ("auto", "cpu") and self.device != requested_device:
             logger.warning(
-                "CUDA requested but not available, falling back to CPU"
+                f"Reranker device '{requested_device}' not available, "
+                f"falling back to '{self.device}'"
             )
-            self.device = "cpu"
-        else:
-            self.device = requested_device
 
         logger.info(
-            f"Loading cross-encoder model '{self.model_name}' on device '{self.device}'"
+            f"Loading cross-encoder model '{self.model_name}' on device '{self.device}' "
+            f"(configured: {requested_device})"
         )
 
         # Initialize the cross-encoder model
@@ -242,15 +245,23 @@ class Reranker:
         }
 
 
-# Lazy singleton instance - only initialized if reranker is enabled
+# Thread-safe singleton for shared reranker model
+# This reduces memory usage in multi-worker deployments where each worker
+# would otherwise load its own copy of the cross-encoder model (~80MB)
 _reranker_instance: Optional[Reranker] = None
+_reranker_lock = threading.Lock()
 
 
 def get_reranker() -> Optional[Reranker]:
-    """Get the singleton reranker instance.
+    """Get the singleton reranker instance (thread-safe).
 
     Returns None if reranking is disabled in settings.
     Initializes the reranker on first call if enabled.
+
+    Uses double-checked locking pattern to ensure:
+    1. Thread-safety: Only one thread initializes the model
+    2. Efficiency: After initialization, no lock acquisition needed
+    3. Memory savings: All workers share the same model instance
 
     Returns:
         Reranker instance or None if disabled.
@@ -261,7 +272,15 @@ def get_reranker() -> Optional[Reranker]:
         return None
 
     if _reranker_instance is None:
-        _reranker_instance = Reranker()
+        with _reranker_lock:
+            # Double-check inside lock to prevent race conditions
+            if _reranker_instance is None:
+                logger.info(
+                    f"Initializing shared reranker model: {settings.reranker_model} "
+                    f"(device: {settings.reranker_device})"
+                )
+                _reranker_instance = Reranker()
+                logger.info("Shared reranker model initialized successfully")
 
     return _reranker_instance
 
