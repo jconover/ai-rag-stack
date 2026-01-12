@@ -12,6 +12,7 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, desc
 from sqlalchemy.sql import text
@@ -28,6 +29,7 @@ from app.models import (
     FeedbackRequest, FeedbackResponse, RedisPoolStats,
     PostgresPoolStats, QueryLogEntry, QueryLogsResponse,
     QueryAnalyticsSummary,
+    CircuitBreakerStatus, CircuitBreakersStatus,
     # A/B Testing models
     ExperimentCreate, ExperimentUpdate, ExperimentResponse,
     ExperimentListResponse, ExperimentStatsResponse,
@@ -37,6 +39,8 @@ from app.models import (
     # Authentication models
     UserCreate, UserLogin, UserResponse, UserUpdate,
     TokenResponse, APIKeyCreate, APIKeyResponse,
+    # Kubernetes readiness probe models
+    ReadinessCheck, ReadinessResponse, LivenessResponse,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
@@ -58,8 +62,85 @@ from app.auth import (
     generate_api_key, hash_token,
     get_current_user, get_optional_user,
 )
+from app.circuit_breaker import (
+    get_circuit_breaker_states,
+    get_circuit_breakers_healthy,
+    reset_all_circuit_breakers,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Middleware for distributed tracing and debugging via request ID tracking.
+
+    This middleware ensures every request has a unique identifier that can be used
+    for tracing requests across distributed systems and correlating logs.
+
+    Behavior:
+    - If the incoming request has an X-Request-ID header, that value is used
+    - If no X-Request-ID is present, a new UUID is generated
+    - The request ID is attached to request.state.request_id for use in handlers
+    - The X-Request-ID header is added to all responses
+    - Each request is logged with its request ID for debugging
+
+    Usage in route handlers:
+        @app.get("/example")
+        async def example(request: Request):
+            request_id = get_request_id(request)
+            # Use request_id for logging, tracing, etc.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Check for incoming X-Request-ID header or generate a new UUID
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+        # Attach request ID to request state for access in route handlers
+        request.state.request_id = request_id
+
+        # Log the request with its ID
+        logger.debug(
+            f"Request started: {request.method} {request.url.path} [request_id={request_id}]"
+        )
+
+        # Process the request
+        start_time = time.time()
+        response = await call_next(request)
+        duration_ms = (time.time() - start_time) * 1000
+
+        # Add request ID to response headers
+        response.headers["X-Request-ID"] = request_id
+
+        # Log request completion with timing
+        logger.debug(
+            f"Request completed: {request.method} {request.url.path} "
+            f"[request_id={request_id}] [status={response.status_code}] "
+            f"[duration={duration_ms:.2f}ms]"
+        )
+
+        return response
+
+
+def get_request_id(request: Request) -> Optional[str]:
+    """Get the request ID from the current request.
+
+    Helper function to retrieve the request ID that was assigned by the
+    RequestIDMiddleware. Can be used in route handlers for logging and tracing.
+
+    Args:
+        request: The FastAPI Request object
+
+    Returns:
+        The request ID string if available, None otherwise
+
+    Example:
+        @app.get("/api/example")
+        async def example(request: Request):
+            request_id = get_request_id(request)
+            logger.info(f"Processing request [request_id={request_id}]")
+    """
+    return getattr(request.state, "request_id", None)
+
 
 # Rate limiter - uses client IP for identification
 # Limits: 30 requests/minute for chat endpoints (expensive LLM calls)
@@ -111,7 +192,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],  # Allow clients to read request ID header
 )
+
+# Request ID middleware for distributed tracing and debugging
+# Added after CORS so it executes before CORS in the middleware chain
+# This ensures X-Request-ID is available throughout the request lifecycle
+app.add_middleware(RequestIDMiddleware)
 
 # Rate limiting - protects expensive LLM endpoints from abuse
 app.state.limiter = limiter
@@ -185,7 +272,9 @@ async def root():
     return {
         "message": "DevOps AI Assistant API",
         "docs": "/docs",
-        "health": "/api/health"
+        "health": "/api/health",
+        "liveness": "/api/health/live",
+        "readiness": "/api/health/ready"
     }
 
 
@@ -300,9 +389,27 @@ async def save_feedback_to_postgres(
         return None
 
 
+def _build_circuit_breaker_status(name: str, status: dict) -> CircuitBreakerStatus:
+    """Build CircuitBreakerStatus model from status dict."""
+    stats = status.get("stats", {})
+    config = status.get("config", {})
+    return CircuitBreakerStatus(
+        name=name,
+        state=status.get("state", "unknown"),
+        total_calls=stats.get("total_calls", 0),
+        successful_calls=stats.get("successful_calls", 0),
+        failed_calls=stats.get("failed_calls", 0),
+        rejected_calls=stats.get("rejected_calls", 0),
+        success_rate=stats.get("success_rate"),
+        time_until_retry=status.get("time_until_retry"),
+        failure_threshold=config.get("failure_threshold", 5),
+        reset_timeout_seconds=config.get("reset_timeout_seconds", 30.0),
+    )
+
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint with component status including reranker, Redis pool, and PostgreSQL."""
+    """Health check endpoint with component status including reranker, Redis pool, PostgreSQL, and circuit breakers."""
     ollama_connected = rag_pipeline.is_ollama_connected()
     qdrant_connected = vector_store.is_connected()
 
@@ -343,6 +450,16 @@ async def health_check():
         pool_timeout=pg_pool_stats.get("pool_timeout"),
     )
 
+    # Get circuit breaker status
+    cb_states = get_circuit_breaker_states()
+    cb_healthy = get_circuit_breakers_healthy()
+    circuit_breakers_status = CircuitBreakersStatus(
+        healthy=cb_healthy,
+        ollama=_build_circuit_breaker_status("ollama", cb_states.get("ollama", {})),
+        qdrant=_build_circuit_breaker_status("qdrant", cb_states.get("qdrant", {})),
+        tavily=_build_circuit_breaker_status("tavily", cb_states.get("tavily", {})),
+    )
+
     # Core services must be connected for healthy status
     # PostgreSQL is optional - not required for core functionality
     core_healthy = all([ollama_connected, qdrant_connected, redis_connected])
@@ -354,10 +471,13 @@ async def health_check():
     )
 
     # Determine overall status
-    if core_healthy and reranker_healthy and postgres_connected:
+    # Consider circuit breaker health as part of overall status
+    if core_healthy and reranker_healthy and postgres_connected and cb_healthy:
         status = "healthy"
-    elif core_healthy and reranker_healthy:
+    elif core_healthy and reranker_healthy and cb_healthy:
         status = "degraded"  # PostgreSQL down but core services OK
+    elif core_healthy and reranker_healthy:
+        status = "degraded"  # Circuit breakers open but services might recover
     else:
         status = "unhealthy"
 
@@ -372,7 +492,319 @@ async def health_check():
         reranker_model=reranker_status.get('model_name'),
         redis_pool=redis_pool_stats,
         postgres_pool=postgres_pool_stats,
+        circuit_breakers=circuit_breakers_status,
     )
+
+
+@app.get("/api/health/live", response_model=LivenessResponse)
+async def liveness_probe():
+    """Kubernetes liveness probe - checks if the application process is running.
+
+    This is a simple probe that returns 200 if the FastAPI server is responding.
+    Use this for Kubernetes livenessProbe to detect hung/unresponsive processes.
+
+    Returns:
+        LivenessResponse with alive=True and current timestamp
+    """
+    return LivenessResponse(
+        alive=True,
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+
+
+@app.get("/api/health/ready", response_model=ReadinessResponse)
+async def readiness_probe():
+    """Kubernetes readiness probe - deep check of all dependencies.
+
+    Performs comprehensive checks to verify the application can serve traffic:
+    - Embedding model: Test embedding generation with correct dimensions
+    - Ollama: Verify at least one model is available and responding
+    - Vector store: Check Qdrant collection exists with documents
+    - Redis: Verify connection is working
+    - Reranker: Check model is loaded (if enabled)
+
+    Returns 200 if all critical checks pass, 503 Service Unavailable otherwise.
+    Each check includes latency measurement for performance monitoring.
+
+    Returns:
+        ReadinessResponse with overall readiness and individual check results
+    """
+    checks: dict[str, ReadinessCheck] = {}
+    all_ready = True
+
+    # Check 1: Embedding model readiness
+    embedding_check = await _check_embedding_model()
+    checks["embedding_model"] = embedding_check
+    if not embedding_check.ready:
+        all_ready = False
+
+    # Check 2: Ollama LLM readiness
+    ollama_check = await _check_ollama()
+    checks["ollama"] = ollama_check
+    if not ollama_check.ready:
+        all_ready = False
+
+    # Check 3: Vector store (Qdrant) readiness
+    vector_store_check = await _check_vector_store()
+    checks["vector_store"] = vector_store_check
+    if not vector_store_check.ready:
+        all_ready = False
+
+    # Check 4: Redis readiness
+    redis_check = await _check_redis()
+    checks["redis"] = redis_check
+    if not redis_check.ready:
+        all_ready = False
+
+    # Check 5: Reranker readiness (only if enabled)
+    if settings.reranker_enabled:
+        reranker_check = await _check_reranker()
+        checks["reranker"] = reranker_check
+        if not reranker_check.ready:
+            all_ready = False
+
+    response = ReadinessResponse(ready=all_ready, checks=checks)
+
+    # Return 503 if not ready (Kubernetes will not route traffic)
+    if not all_ready:
+        raise HTTPException(
+            status_code=503,
+            detail=response.model_dump()
+        )
+
+    return response
+
+
+async def _check_embedding_model() -> ReadinessCheck:
+    """Check if embedding model is loaded and producing correct dimensions."""
+    start_time = time.perf_counter()
+    try:
+        # Run embedding in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        test_vector = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: vector_store.embeddings.embed_query("readiness probe test")
+            ),
+            timeout=10.0  # 10 second timeout
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        # Verify dimensions match expected
+        actual_dims = len(test_vector)
+        expected_dims = settings.embedding_dimension
+
+        if actual_dims == expected_dims:
+            return ReadinessCheck(
+                ready=True,
+                message=f"Model loaded, {actual_dims} dimensions",
+                latency_ms=round(latency_ms, 2)
+            )
+        else:
+            return ReadinessCheck(
+                ready=False,
+                message=f"Dimension mismatch: expected {expected_dims}, got {actual_dims}",
+                latency_ms=round(latency_ms, 2)
+            )
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message="Embedding model timeout (>10s)",
+            latency_ms=round(latency_ms, 2)
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message=f"Embedding model error: {str(e)[:100]}",
+            latency_ms=round(latency_ms, 2)
+        )
+
+
+async def _check_ollama() -> ReadinessCheck:
+    """Check if Ollama is connected and has at least one model available."""
+    start_time = time.perf_counter()
+    try:
+        # Use the existing method from rag_pipeline
+        models = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                rag_pipeline.list_available_models
+            ),
+            timeout=5.0  # 5 second timeout
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        if models and len(models) > 0:
+            # Get first model name for display
+            model_names = [m.get('name', 'unknown') for m in models[:3]]
+            model_display = ', '.join(model_names)
+            if len(models) > 3:
+                model_display += f" (+{len(models) - 3} more)"
+            return ReadinessCheck(
+                ready=True,
+                message=f"{len(models)} model(s) available: {model_display}",
+                latency_ms=round(latency_ms, 2)
+            )
+        else:
+            return ReadinessCheck(
+                ready=False,
+                message="No models available in Ollama",
+                latency_ms=round(latency_ms, 2)
+            )
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message="Ollama timeout (>5s)",
+            latency_ms=round(latency_ms, 2)
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message=f"Ollama error: {str(e)[:100]}",
+            latency_ms=round(latency_ms, 2)
+        )
+
+
+async def _check_vector_store() -> ReadinessCheck:
+    """Check if Qdrant collection exists and has documents."""
+    start_time = time.perf_counter()
+    try:
+        # Get collection stats using existing method
+        stats = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                vector_store.get_stats
+            ),
+            timeout=5.0  # 5 second timeout
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        # Check for error in stats
+        if stats.get('error'):
+            return ReadinessCheck(
+                ready=False,
+                message=f"Collection error: {stats['error'][:100]}",
+                latency_ms=round(latency_ms, 2)
+            )
+
+        points_count = stats.get('points_count', 0)
+        if points_count > 0:
+            return ReadinessCheck(
+                ready=True,
+                message=f"Collection has {points_count:,} documents",
+                latency_ms=round(latency_ms, 2)
+            )
+        else:
+            return ReadinessCheck(
+                ready=False,
+                message="Collection exists but has no documents",
+                latency_ms=round(latency_ms, 2)
+            )
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message="Vector store timeout (>5s)",
+            latency_ms=round(latency_ms, 2)
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message=f"Vector store error: {str(e)[:100]}",
+            latency_ms=round(latency_ms, 2)
+        )
+
+
+async def _check_redis() -> ReadinessCheck:
+    """Check if Redis connection is working."""
+    start_time = time.perf_counter()
+    try:
+        # Use asyncio to run the blocking Redis ping
+        result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                redis_client.ping
+            ),
+            timeout=2.0  # 2 second timeout for Redis
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        if result:
+            return ReadinessCheck(
+                ready=True,
+                message="Connected",
+                latency_ms=round(latency_ms, 2)
+            )
+        else:
+            return ReadinessCheck(
+                ready=False,
+                message="Redis ping returned false",
+                latency_ms=round(latency_ms, 2)
+            )
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message="Redis timeout (>2s)",
+            latency_ms=round(latency_ms, 2)
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message=f"Redis error: {str(e)[:100]}",
+            latency_ms=round(latency_ms, 2)
+        )
+
+
+async def _check_reranker() -> ReadinessCheck:
+    """Check if reranker model is loaded and ready."""
+    start_time = time.perf_counter()
+    try:
+        # Get reranker status using existing method
+        status = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                rag_pipeline.get_reranker_status
+            ),
+            timeout=5.0  # 5 second timeout
+        )
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        if status.get('loaded', False):
+            model_name = status.get('model_name', 'unknown')
+            device = status.get('device', 'unknown')
+            return ReadinessCheck(
+                ready=True,
+                message=f"Model loaded ({model_name}) on {device}",
+                latency_ms=round(latency_ms, 2)
+            )
+        else:
+            error = status.get('error', 'Not initialized')
+            return ReadinessCheck(
+                ready=False,
+                message=f"Reranker not loaded: {error}",
+                latency_ms=round(latency_ms, 2)
+            )
+    except asyncio.TimeoutError:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message="Reranker check timeout (>5s)",
+            latency_ms=round(latency_ms, 2)
+        )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return ReadinessCheck(
+            ready=False,
+            message=f"Reranker error: {str(e)[:100]}",
+            latency_ms=round(latency_ms, 2)
+        )
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -564,6 +996,60 @@ async def get_stats():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/circuit-breakers", response_model=CircuitBreakersStatus)
+async def get_circuit_breakers_status():
+    """Get detailed circuit breaker status for all external services.
+
+    Returns the current state and statistics for circuit breakers protecting:
+    - Ollama (LLM service)
+    - Qdrant (vector database)
+    - Tavily (web search API)
+
+    Circuit breaker states:
+    - closed: Normal operation, requests pass through
+    - open: Service failing, requests fail fast without attempting
+    - half_open: Testing if service has recovered
+
+    Returns:
+        CircuitBreakersStatus with detailed status for each breaker
+    """
+    cb_states = get_circuit_breaker_states()
+    cb_healthy = get_circuit_breakers_healthy()
+
+    return CircuitBreakersStatus(
+        healthy=cb_healthy,
+        ollama=_build_circuit_breaker_status("ollama", cb_states.get("ollama", {})),
+        qdrant=_build_circuit_breaker_status("qdrant", cb_states.get("qdrant", {})),
+        tavily=_build_circuit_breaker_status("tavily", cb_states.get("tavily", {})),
+    )
+
+
+@app.post("/api/circuit-breakers/reset", status_code=200)
+async def reset_circuit_breakers():
+    """Reset all circuit breakers to closed state.
+
+    WARNING: This should only be used for manual recovery after
+    confirming that external services are healthy again.
+
+    This endpoint:
+    - Resets all circuit breakers (Ollama, Qdrant, Tavily) to CLOSED state
+    - Clears failure counts and statistics
+    - Allows requests to flow through immediately
+
+    Use with caution - if services are still failing, circuit breakers
+    will re-open after the failure threshold is reached again.
+
+    Returns:
+        Status message confirming reset
+    """
+    reset_all_circuit_breakers()
+    return {
+        "status": "reset",
+        "message": "All circuit breakers reset to CLOSED state",
+        "services": ["ollama", "qdrant", "tavily"]
+    }
 
 
 @app.get("/api/history/{session_id}")

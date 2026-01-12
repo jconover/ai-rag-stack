@@ -1,7 +1,12 @@
-"""Web search fallback module using Tavily API.
+"""Web search fallback module using Tavily API with circuit breaker protection.
 
 When local vector search returns low-confidence results, this module
 provides web search fallback to find relevant information from the internet.
+
+Features:
+- Circuit breaker protection for resilience
+- Automatic retries with exponential backoff
+- Graceful degradation when service unavailable
 
 Usage:
     from app.web_search import web_searcher
@@ -20,6 +25,11 @@ from typing import Optional, List, Dict, Any
 import httpx
 
 from app.config import settings
+from app.circuit_breaker import (
+    tavily_circuit_breaker,
+    CircuitBreakerOpen,
+    get_service_unavailable_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +192,14 @@ class TavilySearcher:
             payload["exclude_domains"] = final_exclude
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                http_response = await client.post(TAVILY_API_URL, json=payload)
-                http_response.raise_for_status()
-                data = http_response.json()
+            # Wrap the HTTP call with circuit breaker protection
+            async def _execute_search():
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    http_response = await client.post(TAVILY_API_URL, json=payload)
+                    http_response.raise_for_status()
+                    return http_response.json()
+
+            data = await tavily_circuit_breaker.call_async(_execute_search)
 
             # Parse results
             for item in data.get("results", []):
@@ -202,6 +216,11 @@ class TavilySearcher:
                 f"Tavily search completed: query='{query[:50]}...' "
                 f"results={len(response.results)} time={time.perf_counter() - start_time:.2f}s"
             )
+
+        except CircuitBreakerOpen as e:
+            response.error = get_service_unavailable_message(e)
+            response.triggered = False  # Mark as not triggered since circuit is open
+            logger.warning(f"Tavily circuit breaker open: {response.error}")
 
         except httpx.TimeoutException:
             response.error = f"Tavily search timed out after {self.timeout_seconds}s"
@@ -257,10 +276,14 @@ class TavilySearcher:
             payload["exclude_domains"] = final_exclude
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                http_response = client.post(TAVILY_API_URL, json=payload)
-                http_response.raise_for_status()
-                data = http_response.json()
+            # Wrap the HTTP call with circuit breaker protection
+            def _execute_search():
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    http_response = client.post(TAVILY_API_URL, json=payload)
+                    http_response.raise_for_status()
+                    return http_response.json()
+
+            data = tavily_circuit_breaker.call(_execute_search)
 
             # Parse results
             for item in data.get("results", []):
@@ -277,6 +300,11 @@ class TavilySearcher:
                 f"Tavily search completed: query='{query[:50]}...' "
                 f"results={len(response.results)} time={time.perf_counter() - start_time:.2f}s"
             )
+
+        except CircuitBreakerOpen as e:
+            response.error = get_service_unavailable_message(e)
+            response.triggered = False  # Mark as not triggered since circuit is open
+            logger.warning(f"Tavily circuit breaker open: {response.error}")
 
         except httpx.TimeoutException:
             response.error = f"Tavily search timed out after {self.timeout_seconds}s"

@@ -81,6 +81,28 @@ class PostgresPoolStats(BaseModel):
     pool_timeout: Optional[float] = Field(None, description="Pool connection timeout in seconds")
 
 
+class CircuitBreakerStatus(BaseModel):
+    """Status of a single circuit breaker"""
+    name: str = Field(..., description="Circuit breaker name (ollama, qdrant, tavily)")
+    state: str = Field(..., description="Current state: closed, open, half_open")
+    total_calls: int = Field(0, description="Total number of calls through this breaker")
+    successful_calls: int = Field(0, description="Number of successful calls")
+    failed_calls: int = Field(0, description="Number of failed calls")
+    rejected_calls: int = Field(0, description="Calls rejected due to open circuit")
+    success_rate: Optional[float] = Field(None, description="Success rate as decimal (0-1)")
+    time_until_retry: Optional[float] = Field(None, description="Seconds until circuit may close (when open)")
+    failure_threshold: int = Field(..., description="Failures needed to open circuit")
+    reset_timeout_seconds: float = Field(..., description="Time before testing recovery")
+
+
+class CircuitBreakersStatus(BaseModel):
+    """Status of all circuit breakers"""
+    healthy: bool = Field(..., description="True if all breakers are closed or half-open")
+    ollama: CircuitBreakerStatus = Field(..., description="Ollama LLM circuit breaker")
+    qdrant: CircuitBreakerStatus = Field(..., description="Qdrant vector DB circuit breaker")
+    tavily: CircuitBreakerStatus = Field(..., description="Tavily web search circuit breaker")
+
+
 class HealthResponse(BaseModel):
     status: str
     ollama_connected: bool
@@ -92,6 +114,7 @@ class HealthResponse(BaseModel):
     reranker_model: Optional[str] = Field(None, description="Reranker model name")
     redis_pool: Optional[RedisPoolStats] = Field(None, description="Redis connection pool statistics")
     postgres_pool: Optional[PostgresPoolStats] = Field(None, description="PostgreSQL connection pool statistics")
+    circuit_breakers: Optional[CircuitBreakersStatus] = Field(None, description="Circuit breaker status for resilience")
     components: Optional[Dict[str, ComponentStatus]] = Field(None, description="Detailed component status")
 
 
@@ -416,3 +439,26 @@ class APIKeyResponse(BaseModel):
     last_used_at: Optional[str] = Field(None, description="Last usage timestamp (ISO format)")
     key: Optional[str] = Field(None, description="API key value (only returned on creation)")
     key_prefix: Optional[str] = Field(None, description="First 8 characters of API key for identification")
+
+
+# =====================
+# Kubernetes Readiness Probe Models
+# =====================
+
+class ReadinessCheck(BaseModel):
+    """Individual readiness check result"""
+    ready: bool = Field(..., description="Whether this component is ready to serve traffic")
+    message: str = Field(..., description="Human-readable status message")
+    latency_ms: float = Field(..., description="Time taken to perform this check in milliseconds")
+
+
+class ReadinessResponse(BaseModel):
+    """Deep readiness probe response for Kubernetes deployments"""
+    ready: bool = Field(..., description="Overall readiness - true only if all critical checks pass")
+    checks: Dict[str, ReadinessCheck] = Field(..., description="Individual component check results")
+
+
+class LivenessResponse(BaseModel):
+    """Simple liveness probe response"""
+    alive: bool = Field(True, description="Whether the application process is running")
+    timestamp: str = Field(..., description="Current server timestamp (ISO format)")

@@ -9,17 +9,21 @@ Features:
 - Content type detection (prose, code, list, table)
 - Metadata enrichment with heading paths
 - Incremental ingestion with change detection (only re-process changed files)
+- Idempotent ingestion using content-based deterministic UUIDs (no duplicates on re-run)
 
 Usage:
     python ingest_docs.py              # Incremental ingestion (default)
     python ingest_docs.py --full       # Force full re-ingestion
     python ingest_docs.py --dry-run    # Show what would be processed
     python ingest_docs.py --stats      # Show registry statistics
+    python ingest_docs.py --check-duplicates  # Check for duplicate vectors
 """
 
 import argparse
+import hashlib
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Set, Tuple
 import asyncio
@@ -95,6 +99,34 @@ SPARSE_ENCODER_MODEL = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
 # Vector constants
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
+
+# UUID namespace for deterministic chunk ID generation
+# Using DNS namespace (standard UUID5 namespace) for consistency
+CHUNK_ID_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+
+
+def generate_chunk_id(source_path: str, chunk_index: int, content: str) -> str:
+    """Generate deterministic UUID based on content.
+
+    Uses UUID5 with a namespace to ensure:
+    - Same content always gets same ID (idempotent)
+    - Different content gets different ID
+    - IDs are valid UUIDs for Qdrant
+
+    Args:
+        source_path: Path to the source file
+        chunk_index: Index of the chunk within the file
+        content: The chunk's text content
+
+    Returns:
+        Deterministic UUID string
+    """
+    # Create a content hash for additional uniqueness
+    content_hash = hashlib.md5(content.encode()).hexdigest()[:16]
+    # Combine source path, chunk index, and content hash
+    identifier = f"{source_path}:{chunk_index}:{content_hash}"
+    # Generate deterministic UUID5
+    return str(uuid.uuid5(CHUNK_ID_NAMESPACE, identifier))
 
 
 class DocumentIngestionPipeline:
@@ -236,6 +268,110 @@ class DocumentIngestionPipeline:
         except Exception as e:
             print(f"Error deleting chunks for {source_path}: {e}")
             return 0
+
+    def check_duplicates(self, collection_name: str = COLLECTION_NAME, sample_size: int = 10000) -> Dict[str, any]:
+        """
+        Check for duplicate content in the vector store.
+
+        Scans the collection for vectors with identical content hashes,
+        which would indicate duplicates that should have been deduplicated
+        by idempotent ingestion.
+
+        Args:
+            collection_name: Qdrant collection name
+            sample_size: Maximum number of points to scan (for large collections)
+
+        Returns:
+            Dict with duplicate analysis results
+        """
+        try:
+            # Check if collection exists
+            collections = self.client.get_collections().collections
+            collection_names = [c.name for c in collections]
+
+            if collection_name not in collection_names:
+                return {
+                    'error': f"Collection '{collection_name}' does not exist",
+                    'total_points': 0,
+                    'duplicates_found': 0,
+                }
+
+            # Get collection info
+            collection_info = self.client.get_collection(collection_name)
+            total_points = collection_info.points_count
+
+            print(f"Scanning collection '{collection_name}' ({total_points} points)...")
+
+            # Scroll through points to check for duplicates
+            content_hashes: Dict[str, List[str]] = {}  # hash -> list of point IDs
+            points_scanned = 0
+            offset = None
+
+            while points_scanned < min(sample_size, total_points):
+                # Fetch batch of points
+                results, offset = self.client.scroll(
+                    collection_name=collection_name,
+                    limit=100,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                if not results:
+                    break
+
+                for point in results:
+                    points_scanned += 1
+                    content = point.payload.get('page_content', '')
+                    source = point.payload.get('source', 'unknown')
+
+                    # Create content hash for duplicate detection
+                    content_hash = hashlib.md5(content.encode()).hexdigest()
+                    key = f"{source}:{content_hash}"
+
+                    if key not in content_hashes:
+                        content_hashes[key] = []
+                    content_hashes[key].append(str(point.id))
+
+                if offset is None:
+                    break
+
+            # Find duplicates (same content from same source)
+            duplicates = {k: v for k, v in content_hashes.items() if len(v) > 1}
+
+            # Analyze results
+            duplicate_count = sum(len(ids) - 1 for ids in duplicates.values())
+            unique_content = len(content_hashes)
+
+            result = {
+                'total_points': total_points,
+                'points_scanned': points_scanned,
+                'unique_content': unique_content,
+                'duplicate_groups': len(duplicates),
+                'duplicate_points': duplicate_count,
+                'duplication_rate': (duplicate_count / points_scanned * 100) if points_scanned > 0 else 0,
+            }
+
+            # Include sample duplicates for investigation
+            if duplicates:
+                sample_duplicates = []
+                for key, ids in list(duplicates.items())[:5]:  # Show first 5 groups
+                    source, _ = key.rsplit(':', 1)
+                    sample_duplicates.append({
+                        'source': source,
+                        'point_ids': ids[:5],  # Limit to 5 IDs per group
+                        'count': len(ids),
+                    })
+                result['sample_duplicates'] = sample_duplicates
+
+            return result
+
+        except Exception as e:
+            return {
+                'error': str(e),
+                'total_points': 0,
+                'duplicates_found': 0,
+            }
 
     def load_documents_from_directory(self, directory: str, source_name: str) -> List[Document]:
         """Load all markdown and text files from a directory"""
@@ -379,10 +515,32 @@ class DocumentIngestionPipeline:
             print(f"Collection '{collection_name}' already exists")
 
     def _ingest_hybrid(self, chunks: List[Document], collection_name: str, batch_size: int = 100):
-        """Ingest documents with both dense and sparse vectors."""
+        """Ingest documents with both dense and sparse vectors using idempotent UUIDs.
+
+        Uses content-based deterministic UUIDs to ensure:
+        - Re-running ingestion updates existing vectors instead of creating duplicates
+        - Same content always maps to same ID (idempotent)
+        - Qdrant's upsert behavior handles update vs insert automatically
+        """
         self._ensure_hybrid_collection(collection_name)
 
         print(f"Generating embeddings for {len(chunks)} chunks...")
+
+        # Track chunk indices per source file for deterministic ID generation
+        source_chunk_indices: Dict[str, int] = {}
+
+        # Assign chunk indices and generate deterministic IDs
+        for chunk in chunks:
+            source = chunk.metadata.get('source', 'unknown')
+            if source not in source_chunk_indices:
+                source_chunk_indices[source] = 0
+            chunk_index = source_chunk_indices[source]
+            source_chunk_indices[source] += 1
+
+            # Generate deterministic UUID and store in metadata
+            chunk_id = generate_chunk_id(source, chunk_index, chunk.page_content)
+            chunk.metadata['chunk_id'] = chunk_id
+            chunk.metadata['chunk_index'] = chunk_index
 
         # Process in batches
         total_points = 0
@@ -398,16 +556,19 @@ class DocumentIngestionPipeline:
 
             # Create points with both vector types
             points = []
-            for j, (doc, dense_vec, sparse_vec) in enumerate(zip(batch, dense_embeddings, sparse_embeddings)):
-                point_id = total_points + j
+            for doc, dense_vec, sparse_vec in zip(batch, dense_embeddings, sparse_embeddings):
+                # Use deterministic UUID from metadata
+                point_id = doc.metadata['chunk_id']
 
                 # Build payload from document metadata
                 payload = {
                     'page_content': doc.page_content,
                     'source': doc.metadata.get('source', 'Unknown'),
                     'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    'chunk_id': point_id,
+                    'chunk_index': doc.metadata.get('chunk_index', 0),
                     **{k: v for k, v in doc.metadata.items()
-                       if k not in ('page_content', 'source', 'source_type')}
+                       if k not in ('page_content', 'source', 'source_type', 'chunk_id', 'chunk_index')}
                 }
 
                 point = PointStruct(
@@ -423,17 +584,21 @@ class DocumentIngestionPipeline:
                 )
                 points.append(point)
 
-            # Upsert batch
+            # Upsert batch - same ID = update, different ID = insert
             self.client.upsert(
                 collection_name=collection_name,
                 points=points,
             )
             total_points += len(batch)
 
-        print(f"Successfully ingested {total_points} chunks with hybrid vectors")
+        print(f"Successfully ingested {total_points} chunks with hybrid vectors (idempotent UUIDs)")
 
     def ingest_documents(self, documents: List[Document], collection_name: str = COLLECTION_NAME):
-        """Split documents and ingest into Qdrant"""
+        """Split documents and ingest into Qdrant using idempotent UUIDs.
+
+        Uses content-based deterministic UUIDs to prevent duplicates on re-run.
+        Same content always maps to same ID, enabling safe re-ingestion.
+        """
         if not documents:
             print("No documents to ingest")
             return
@@ -447,23 +612,14 @@ class DocumentIngestionPipeline:
 
         print(f"Ingesting into Qdrant collection '{collection_name}'...")
 
-        # Use hybrid ingestion if enabled
+        # Use hybrid or dense-only ingestion with idempotent UUIDs
         if self.use_hybrid and self.sparse_encoder is not None:
             self._ingest_hybrid(chunks, collection_name)
-            return None  # Hybrid ingestion doesn't return a vectorstore
+        else:
+            self._ingest_dense_only(chunks, collection_name)
 
-        # Create or update vector store (dense-only)
-        vectorstore = Qdrant.from_documents(
-            chunks,
-            self.embeddings,
-            host=QDRANT_HOST,
-            port=QDRANT_PORT,
-            collection_name=collection_name,
-            force_recreate=False,  # Set to True to recreate collection
-        )
-
-        print(f"Successfully ingested {len(chunks)} chunks into Qdrant")
-        return vectorstore
+        print(f"Successfully ingested {len(chunks)} chunks into Qdrant (idempotent)")
+        return None  # Direct client operations don't return vectorstore
 
     def run(self, use_raw_loading: bool = True, force_full: bool = False, dry_run: bool = False):
         """
@@ -680,9 +836,101 @@ class DocumentIngestionPipeline:
         print(f"Chunks deleted: {total_stats['chunks_deleted']}")
         print_stats(self.registry)
 
+    def _ensure_dense_collection(self, collection_name: str):
+        """Create or verify collection exists for dense-only vectors."""
+        collections = self.client.get_collections().collections
+        collection_names = [c.name for c in collections]
+
+        if collection_name not in collection_names:
+            print(f"Creating dense-only collection '{collection_name}'...")
+            self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIMENSION,
+                    distance=Distance.COSINE,
+                ),
+            )
+            print(f"Created collection '{collection_name}' with dense vectors "
+                  f"({EMBEDDING_DIMENSION} dims)")
+        else:
+            print(f"Collection '{collection_name}' already exists")
+
+    def _ingest_dense_only(self, chunks: List[Document], collection_name: str, batch_size: int = 100):
+        """Ingest documents with dense vectors only using idempotent UUIDs.
+
+        Uses content-based deterministic UUIDs to ensure:
+        - Re-running ingestion updates existing vectors instead of creating duplicates
+        - Same content always maps to same ID (idempotent)
+        - Qdrant's upsert behavior handles update vs insert automatically
+        """
+        self._ensure_dense_collection(collection_name)
+
+        print(f"Generating embeddings for {len(chunks)} chunks...")
+
+        # Track chunk indices per source file for deterministic ID generation
+        source_chunk_indices: Dict[str, int] = {}
+
+        # Assign chunk indices and generate deterministic IDs
+        for chunk in chunks:
+            source = chunk.metadata.get('source', 'unknown')
+            if source not in source_chunk_indices:
+                source_chunk_indices[source] = 0
+            chunk_index = source_chunk_indices[source]
+            source_chunk_indices[source] += 1
+
+            # Generate deterministic UUID and store in metadata
+            chunk_id = generate_chunk_id(source, chunk_index, chunk.page_content)
+            chunk.metadata['chunk_id'] = chunk_id
+            chunk.metadata['chunk_index'] = chunk_index
+
+        # Process in batches
+        total_points = 0
+        for i in tqdm(range(0, len(chunks), batch_size), desc="Ingesting batches"):
+            batch = chunks[i:i + batch_size]
+            texts = [doc.page_content for doc in batch]
+
+            # Generate dense embeddings
+            dense_embeddings = self.embeddings.embed_documents(texts)
+
+            # Create points with dense vectors
+            points = []
+            for doc, dense_vec in zip(batch, dense_embeddings):
+                # Use deterministic UUID from metadata
+                point_id = doc.metadata['chunk_id']
+
+                # Build payload from document metadata
+                payload = {
+                    'page_content': doc.page_content,
+                    'source': doc.metadata.get('source', 'Unknown'),
+                    'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    'chunk_id': point_id,
+                    'chunk_index': doc.metadata.get('chunk_index', 0),
+                    **{k: v for k, v in doc.metadata.items()
+                       if k not in ('page_content', 'source', 'source_type', 'chunk_id', 'chunk_index')}
+                }
+
+                point = PointStruct(
+                    id=point_id,
+                    vector=dense_vec,
+                    payload=payload,
+                )
+                points.append(point)
+
+            # Upsert batch - same ID = update, different ID = insert
+            self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+            total_points += len(batch)
+
+        print(f"Successfully ingested {total_points} chunks with dense vectors (idempotent UUIDs)")
+
     def _ingest_chunks_with_registry(self, chunks: List[Document], collection_name: str = COLLECTION_NAME):
         """
         Ingest chunks and update the registry with file tracking.
+
+        Uses idempotent content-based UUIDs for all ingestion modes to prevent
+        duplicate vectors on re-run. Same content always maps to same ID.
 
         Args:
             chunks: List of Document chunks to ingest
@@ -701,30 +949,25 @@ class DocumentIngestionPipeline:
                 chunks_by_source[source] = []
             chunks_by_source[source].append(chunk)
 
-        # Use hybrid ingestion if enabled
+        # Use hybrid or dense-only ingestion with idempotent UUIDs
         if self.use_hybrid and self.sparse_encoder is not None:
             self._ingest_hybrid(chunks, collection_name)
         else:
-            # Dense-only ingestion
-            Qdrant.from_documents(
-                chunks,
-                self.embeddings,
-                host=QDRANT_HOST,
-                port=QDRANT_PORT,
-                collection_name=collection_name,
-                force_recreate=False,
-            )
+            self._ingest_dense_only(chunks, collection_name)
 
-        # Update registry for each file
+        # Update registry for each file with chunk IDs
         for source_path, source_chunks in chunks_by_source.items():
             if source_chunks:
                 first_chunk = source_chunks[0]
+                # Collect chunk IDs from metadata (set by _ingest_hybrid or _ingest_dense_only)
+                chunk_ids = [c.metadata.get('chunk_id') for c in source_chunks if c.metadata.get('chunk_id')]
                 self.registry.update_file(
                     file_path=source_path,
                     content_hash=first_chunk.metadata.get('content_hash', ''),
                     source_type=first_chunk.metadata.get('source_type', 'unknown'),
                     chunk_count=len(source_chunks),
                     file_size=first_chunk.metadata.get('file_size', 0),
+                    chunk_ids=chunk_ids if chunk_ids else None,
                 )
 
         print(f"Successfully ingested {len(chunks)} chunks and updated registry")
@@ -737,7 +980,11 @@ def ingest_single_file(
     use_semantic_chunking: bool = True,
 ) -> int:
     """
-    Ingest a single file into the vector database.
+    Ingest a single file into the vector database using idempotent UUIDs.
+
+    Uses content-based deterministic UUIDs to ensure:
+    - Re-running ingestion updates existing vectors instead of creating duplicates
+    - Same content always maps to same ID (idempotent)
 
     Args:
         file_path: Path to the file to ingest
@@ -770,16 +1017,12 @@ def ingest_single_file(
     chunks = pipeline.split_documents([doc])
 
     if chunks:
-        # Ingest chunks
-        vectorstore = Qdrant.from_documents(
-            chunks,
-            pipeline.embeddings,
-            host=QDRANT_HOST,
-            port=QDRANT_PORT,
-            collection_name=collection_name,
-            force_recreate=False,
-        )
-        print(f"Ingested {len(chunks)} chunks from {file_path.name}")
+        # Use idempotent ingestion with deterministic UUIDs
+        if pipeline.use_hybrid and pipeline.sparse_encoder is not None:
+            pipeline._ingest_hybrid(chunks, collection_name)
+        else:
+            pipeline._ingest_dense_only(chunks, collection_name)
+        print(f"Ingested {len(chunks)} chunks from {file_path.name} (idempotent)")
 
     return len(chunks)
 
@@ -796,6 +1039,11 @@ Examples:
   python ingest_docs.py --dry-run    # Preview what would be processed
   python ingest_docs.py --stats      # Show registry statistics only
   python ingest_docs.py --source kubernetes  # Process only kubernetes docs
+  python ingest_docs.py --check-duplicates   # Check for duplicate vectors
+
+Note: This script uses idempotent content-based UUIDs. Re-running ingestion
+will update existing vectors instead of creating duplicates. Safe to run
+'make ingest' multiple times.
         """
     )
 
@@ -835,6 +1083,12 @@ Examples:
         help='Use legacy RecursiveCharacterTextSplitter instead of semantic chunking'
     )
 
+    parser.add_argument(
+        '--check-duplicates',
+        action='store_true',
+        help='Check for duplicate content in the vector store and report findings'
+    )
+
     return parser.parse_args()
 
 
@@ -858,6 +1112,56 @@ def main():
             print("Tip: Use --full flag to re-index all documents")
         return
 
+    # Handle duplicate check mode
+    if args.check_duplicates:
+        print("Checking for duplicate content in vector store...")
+        print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
+        print(f"Collection: {COLLECTION_NAME}")
+        print()
+
+        # Create minimal pipeline just for Qdrant client (skip embedding model)
+        from qdrant_client import QdrantClient
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+        # Create a temporary pipeline instance for the check_duplicates method
+        class DuplicateChecker:
+            def __init__(self, qdrant_client):
+                self.client = qdrant_client
+
+        checker = DuplicateChecker(client)
+        # Borrow the method
+        checker.check_duplicates = DocumentIngestionPipeline.check_duplicates.__get__(checker, DuplicateChecker)
+
+        result = checker.check_duplicates(COLLECTION_NAME)
+
+        if 'error' in result:
+            print(f"Error: {result['error']}")
+            return
+
+        print(f"{'='*60}")
+        print("DUPLICATE CHECK RESULTS")
+        print(f"{'='*60}")
+        print(f"Total points in collection: {result['total_points']}")
+        print(f"Points scanned: {result['points_scanned']}")
+        print(f"Unique content chunks: {result['unique_content']}")
+        print(f"Duplicate groups found: {result['duplicate_groups']}")
+        print(f"Duplicate points (extras): {result['duplicate_points']}")
+        print(f"Duplication rate: {result['duplication_rate']:.2f}%")
+
+        if result.get('sample_duplicates'):
+            print(f"\nSample duplicate groups:")
+            for dup in result['sample_duplicates']:
+                print(f"  - Source: {dup['source']}")
+                print(f"    Count: {dup['count']} duplicates")
+                print(f"    Point IDs: {', '.join(dup['point_ids'][:3])}...")
+
+        if result['duplicate_points'] > 0:
+            print(f"\nRecommendation: Run 'python ingest_docs.py --full' to re-ingest")
+            print("with idempotent UUIDs, which will deduplicate the collection.")
+        else:
+            print("\nNo duplicates found. Collection is clean.")
+        return
+
     # Determine chunking mode
     use_semantic = CHUNKING_MODE.lower() == "semantic" and not args.legacy_chunking
 
@@ -868,6 +1172,7 @@ def main():
     print(f"Chunking mode: {'semantic' if use_semantic else 'legacy'}")
     print(f"Hybrid search: {'enabled' if HYBRID_SEARCH_ENABLED else 'disabled'}")
     print(f"Incremental mode: {'disabled (--full)' if args.full else 'enabled'}")
+    print(f"Idempotent UUIDs: enabled (content-based deterministic IDs)")
 
     if not use_semantic:
         print(f"Chunk size: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP}")

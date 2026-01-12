@@ -9,6 +9,7 @@ Performance optimizations:
 - Redis embedding cache for 30-50% latency reduction on repeated queries
 - HNSW parameter tuning for optimal recall/speed tradeoff
 - Scalar quantization for memory efficiency
+- Circuit breaker protection for resilience
 """
 from typing import List, Optional, Tuple, Dict, Any, Union
 from functools import lru_cache
@@ -16,7 +17,14 @@ from dataclasses import dataclass, field
 import logging
 import hashlib
 import json
+import re
 import redis
+
+from app.circuit_breaker import (
+    qdrant_circuit_breaker,
+    CircuitBreakerOpen,
+    get_service_unavailable_message,
+)
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -116,15 +124,20 @@ class RedisEmbeddingCache:
             self._redis_client = None
 
     def _get_cache_key(self, query: str) -> str:
-        """Generate cache key using MD5 hash of query.
+        """Generate cache key using MD5 hash of query and embedding model.
 
         Using MD5 hash provides:
         - Fixed-length keys regardless of query length
         - Efficient key comparison
         - Collision-resistant (sufficient for caching)
+
+        Includes embedding model hash to prevent stale cache hits when
+        the embedding model is changed (different models produce different
+        vector representations for the same query).
         """
+        model_hash = hashlib.md5(settings.embedding_model.encode('utf-8')).hexdigest()[:8]
         query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()
-        return f"{self.CACHE_PREFIX}{query_hash}"
+        return f"{self.CACHE_PREFIX}{model_hash}:{query_hash}"
 
     def get(self, query: str) -> Optional[List[float]]:
         """Get embedding from Redis cache if present.
@@ -313,6 +326,7 @@ class VectorStore:
     - Scalar quantization for memory efficiency
     - Batch search support for multiple queries
     - Payload indexing for efficient filtering
+    - Query preprocessing with DevOps abbreviation expansion
     """
 
     # HNSW Parameters for optimal performance
@@ -322,6 +336,34 @@ class VectorStore:
     HNSW_EF_CONSTRUCT = 100
     # ef: Search quality at query time (higher = better recall, slower)
     HNSW_EF = 128
+
+    # DevOps abbreviation mappings for query expansion
+    # Format: abbreviation -> expanded form (may include original for context)
+    DEVOPS_ABBREVIATIONS = {
+        # Kubernetes abbreviations
+        "k8s": "kubernetes",
+        "k3s": "k3s kubernetes",  # Keep original + add context
+        "ns": "namespace",
+        "hpa": "horizontal pod autoscaler",
+        "pvc": "persistent volume claim",
+        "pv": "persistent volume",
+        "cm": "configmap",
+        "sa": "service account",
+        "ing": "ingress",
+        "svc": "service",
+        "deploy": "deployment",
+        # Infrastructure tools
+        "tf": "terraform",
+        "iac": "infrastructure as code",
+        # Cloud providers
+        "aws": "amazon web services AWS",  # Keep acronym too
+        "gcp": "google cloud platform GCP",
+        "az": "azure",
+        # CI/CD and DevOps
+        "gh": "github",
+        "ci/cd": "continuous integration continuous delivery",
+        "cicd": "continuous integration continuous delivery",
+    }
 
     # Quantization settings
     # Scalar quantization reduces vector storage by 4x with minimal quality loss
@@ -354,6 +396,57 @@ class VectorStore:
         self.collection_name = settings.qdrant_collection_name
         self._ensure_collection()
         self._ensure_payload_indexes()
+
+    def _preprocess_query(self, query: str) -> str:
+        """
+        Preprocess query for better embedding retrieval.
+
+        Performs the following transformations:
+        1. Normalizes whitespace (collapse multiple spaces)
+        2. Expands common DevOps abbreviations to their full forms
+        3. Case-insensitive matching for abbreviations
+
+        This improves retrieval when users search with abbreviations
+        like "k8s", "tf", "gh" but documentation uses full terms.
+
+        Args:
+            query: The raw user query string
+
+        Returns:
+            The preprocessed query with abbreviations expanded
+        """
+        # Store original for logging comparison
+        original_query = query
+
+        # Step 1: Normalize whitespace - collapse multiple spaces to single space
+        query = re.sub(r'\s+', ' ', query).strip()
+
+        # Step 2: Expand DevOps abbreviations (case-insensitive)
+        # We need to be careful to match whole words only to avoid
+        # expanding "aws" in "drawstring" or "ns" in "instructions"
+        expanded_terms = []
+        for abbrev, expansion in self.DEVOPS_ABBREVIATIONS.items():
+            # Build pattern to match whole word, case-insensitive
+            # Handle special characters in abbreviation (like ci/cd)
+            escaped_abbrev = re.escape(abbrev)
+            pattern = rf'\b{escaped_abbrev}\b'
+
+            if re.search(pattern, query, re.IGNORECASE):
+                # Replace with expansion
+                query = re.sub(pattern, expansion, query, flags=re.IGNORECASE)
+                expanded_terms.append(f"{abbrev} -> {expansion}")
+
+        # Log expansions at debug level
+        if expanded_terms:
+            logger.debug(
+                f"Query preprocessing expanded abbreviations: {', '.join(expanded_terms)}. "
+                f"Original: '{original_query}' -> Processed: '{query}'"
+            )
+
+        # Step 3: Final whitespace cleanup (in case expansions introduced extra spaces)
+        query = re.sub(r'\s+', ' ', query).strip()
+
+        return query
 
     def _ensure_collection(self):
         """Create collection with optimized settings if it doesn't exist"""
@@ -440,7 +533,12 @@ class VectorStore:
             logger.debug(f"Payload index 'source' creation skipped: {e}")
 
     def _embed_query_cached(self, query: str) -> EmbeddingResult:
-        """Generate query embedding with Redis caching.
+        """Generate query embedding with Redis caching and query preprocessing.
+
+        Performs:
+        1. Query preprocessing (abbreviation expansion, whitespace normalization)
+        2. Redis cache lookup for embedding
+        3. Embedding generation with BGE instruction prefix if applicable
 
         Uses Redis to cache embeddings for 30-50% latency reduction
         on repeated queries. Falls back to direct embedding generation
@@ -450,18 +548,23 @@ class VectorStore:
 
         Returns EmbeddingResult with the vector and cache_hit status.
         """
-        cached = _embedding_cache.get(query)
+        # Step 1: Preprocess query (expand abbreviations, normalize whitespace)
+        processed_query = self._preprocess_query(query)
+
+        # Step 2: Check cache using processed query as key
+        # This ensures consistent caching regardless of original abbreviation usage
+        cached = _embedding_cache.get(processed_query)
         if cached is not None:
             return EmbeddingResult(vector=cached, cache_hit=True)
 
         # Cache miss - generate embedding
         # Add BGE instruction prefix for better retrieval quality
-        embed_query = query
+        embed_query = processed_query
         if 'bge' in settings.embedding_model.lower():
-            embed_query = f"{self.BGE_QUERY_INSTRUCTION}{query}"
+            embed_query = f"{self.BGE_QUERY_INSTRUCTION}{processed_query}"
 
         vector = self.embeddings.embed_query(embed_query)
-        _embedding_cache.put(query, vector)  # Cache with original query as key
+        _embedding_cache.put(processed_query, vector)  # Cache with processed query as key
         return EmbeddingResult(vector=vector, cache_hit=False)
 
     def get_embedding_cache_stats(self) -> Dict[str, Any]:
@@ -686,15 +789,22 @@ class VectorStore:
         # Fetch more results than needed to apply score filtering
         fetch_limit = min(top_k * 3, 100) if min_score > 0 else top_k
 
-        # Execute search using Qdrant client directly
-        results = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector,
-            limit=fetch_limit,
-            query_filter=query_filter,
-            search_params=search_params,
-            with_payload=True,
-        )
+        # Execute search using Qdrant client with circuit breaker protection
+        def _execute_search():
+            return self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                limit=fetch_limit,
+                query_filter=query_filter,
+                search_params=search_params,
+                with_payload=True,
+            )
+
+        try:
+            results = qdrant_circuit_breaker.call(_execute_search)
+        except CircuitBreakerOpen as e:
+            logger.warning(f"Qdrant circuit breaker open: {e}")
+            return [], embedding_result.cache_hit
 
         return self._process_search_results(results, min_score, top_k), embedding_result.cache_hit
 
@@ -757,11 +867,18 @@ class VectorStore:
             for vec in query_vectors
         ]
 
-        # Execute batch search
-        batch_results = self.client.search_batch(
-            collection_name=self.collection_name,
-            requests=search_requests,
-        )
+        # Execute batch search with circuit breaker protection
+        def _execute_batch_search():
+            return self.client.search_batch(
+                collection_name=self.collection_name,
+                requests=search_requests,
+            )
+
+        try:
+            batch_results = qdrant_circuit_breaker.call(_execute_batch_search)
+        except CircuitBreakerOpen as e:
+            logger.warning(f"Qdrant circuit breaker open: {e}")
+            return [[] for _ in queries]  # Return empty results for each query
 
         # Process all results
         all_results = []
@@ -860,13 +977,18 @@ class VectorStore:
                 source=source,
             )
 
+        # Preprocess query for both dense and sparse encoding
+        # (dense embedding preprocessing is also done in _embed_query_cached,
+        # but we need the processed query for sparse encoding too)
+        processed_query = self._preprocess_query(query)
+
         # Generate dense embedding with caching
         embedding_result = self._embed_query_cached(query)
         query_vector = embedding_result.vector
 
-        # Generate sparse embedding
+        # Generate sparse embedding using preprocessed query
         try:
-            sparse_vector = sparse_encoder.encode_query(query)
+            sparse_vector = sparse_encoder.encode_query(processed_query)
         except Exception as e:
             logger.warning(f"Sparse encoding failed: {e}, falling back to dense-only")
             # Still return the cache hit info from dense embedding
@@ -888,28 +1010,37 @@ class VectorStore:
         # Fetch more results than needed for RRF fusion
         fetch_limit = min(top_k * 4, 100)
 
-        # Execute dense search (using named vector for hybrid collections)
+        # Execute dense search (using named vector for hybrid collections) with circuit breaker
         try:
-            dense_results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=NamedVector(
-                    name=self.DENSE_VECTOR_NAME,
-                    vector=query_vector,
-                ),
-                limit=fetch_limit,
-                query_filter=query_filter,
-                search_params=search_params,
-                with_payload=True,
-            )
+            def _execute_dense_search():
+                return self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=NamedVector(
+                        name=self.DENSE_VECTOR_NAME,
+                        vector=query_vector,
+                    ),
+                    limit=fetch_limit,
+                    query_filter=query_filter,
+                    search_params=search_params,
+                    with_payload=True,
+                )
+
+            dense_results = qdrant_circuit_breaker.call(_execute_dense_search)
+        except CircuitBreakerOpen as e:
+            logger.warning(f"Qdrant circuit breaker open for dense search: {e}")
+            dense_results = []
         except Exception as e:
             logger.error(f"Dense search failed: {e}")
             dense_results = []
 
-        # Execute sparse search
+        # Execute sparse search with circuit breaker
         sparse_results = []
         try:
             # Check if collection supports sparse vectors
-            collection_info = self.client.get_collection(self.collection_name)
+            def _get_collection_info():
+                return self.client.get_collection(self.collection_name)
+
+            collection_info = qdrant_circuit_breaker.call(_get_collection_info)
             has_sparse = False
 
             # Check for sparse vectors in collection config
@@ -919,21 +1050,26 @@ class VectorStore:
                     has_sparse = self.SPARSE_VECTOR_NAME in params.sparse_vectors
 
             if has_sparse and sparse_vector.indices:
-                sparse_results = self.client.search(
-                    collection_name=self.collection_name,
-                    query_vector=NamedSparseVector(
-                        name=self.SPARSE_VECTOR_NAME,
-                        vector=QdrantSparseVector(
-                            indices=sparse_vector.indices,
-                            values=sparse_vector.values,
-                        )
-                    ),
-                    limit=fetch_limit,
-                    query_filter=query_filter,
-                    with_payload=True,
-                )
+                def _execute_sparse_search():
+                    return self.client.search(
+                        collection_name=self.collection_name,
+                        query_vector=NamedSparseVector(
+                            name=self.SPARSE_VECTOR_NAME,
+                            vector=QdrantSparseVector(
+                                indices=sparse_vector.indices,
+                                values=sparse_vector.values,
+                            )
+                        ),
+                        limit=fetch_limit,
+                        query_filter=query_filter,
+                        with_payload=True,
+                    )
+
+                sparse_results = qdrant_circuit_breaker.call(_execute_sparse_search)
             else:
                 logger.debug("Collection doesn't support sparse vectors, using dense only")
+        except CircuitBreakerOpen as e:
+            logger.warning(f"Qdrant circuit breaker open for sparse search: {e}")
         except Exception as e:
             logger.warning(f"Sparse search failed: {e}, using dense results only")
 
@@ -1030,7 +1166,12 @@ class VectorStore:
             return []
 
     def is_connected(self) -> bool:
-        """Check if Qdrant is connected"""
+        """Check if Qdrant is connected (respects circuit breaker state)."""
+        # Check circuit breaker state first
+        cb_state = qdrant_circuit_breaker.state
+        if cb_state.value == "open":
+            return False
+
         try:
             self.client.get_collections()
             return True

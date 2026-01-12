@@ -42,6 +42,7 @@ class FileState:
     file_size: int
     ingested_at: str
     updated_at: str
+    chunk_ids: Optional[List[str]] = None  # List of deterministic UUID chunk IDs
 
 
 @dataclass
@@ -81,7 +82,7 @@ class IngestionRegistry:
     The registry file is stored at `data/ingestion_registry.db` by default.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2  # Bumped for chunk_ids column
 
     def __init__(self, db_path: Optional[Path] = None):
         """Initialize the registry.
@@ -113,9 +114,16 @@ class IngestionRegistry:
                     chunk_count INTEGER NOT NULL,
                     file_size INTEGER NOT NULL,
                     ingested_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    chunk_ids TEXT
                 )
             """)
+
+            # Migration: add chunk_ids column if it doesn't exist
+            try:
+                conn.execute("SELECT chunk_ids FROM ingested_files LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE ingested_files ADD COLUMN chunk_ids TEXT")
 
             # Create indexes for efficient queries
             conn.execute("""
@@ -159,6 +167,14 @@ class IngestionRegistry:
             ).fetchone()
 
             if row:
+                # Parse chunk_ids from JSON if present
+                chunk_ids = None
+                if row['chunk_ids']:
+                    try:
+                        chunk_ids = json.loads(row['chunk_ids'])
+                    except json.JSONDecodeError:
+                        chunk_ids = None
+
                 return FileState(
                     file_path=row['file_path'],
                     content_hash=row['content_hash'],
@@ -167,6 +183,7 @@ class IngestionRegistry:
                     file_size=row['file_size'],
                     ingested_at=row['ingested_at'],
                     updated_at=row['updated_at'],
+                    chunk_ids=chunk_ids,
                 )
             return None
 
@@ -192,6 +209,7 @@ class IngestionRegistry:
         source_type: str,
         chunk_count: int,
         file_size: int,
+        chunk_ids: Optional[List[str]] = None,
     ) -> None:
         """Update or insert a file's state in the registry.
 
@@ -201,8 +219,10 @@ class IngestionRegistry:
             source_type: Source type (kubernetes, terraform, etc.)
             chunk_count: Number of chunks created from this file
             file_size: File size in bytes
+            chunk_ids: Optional list of deterministic UUID chunk IDs
         """
         now = datetime.utcnow().isoformat()
+        chunk_ids_json = json.dumps(chunk_ids) if chunk_ids else None
 
         with self._get_connection() as conn:
             # Check if file exists
@@ -216,16 +236,16 @@ class IngestionRegistry:
                 conn.execute("""
                     UPDATE ingested_files
                     SET content_hash = ?, source_type = ?, chunk_count = ?,
-                        file_size = ?, updated_at = ?
+                        file_size = ?, updated_at = ?, chunk_ids = ?
                     WHERE file_path = ?
-                """, (content_hash, source_type, chunk_count, file_size, now, file_path))
+                """, (content_hash, source_type, chunk_count, file_size, now, chunk_ids_json, file_path))
             else:
                 # Insert new
                 conn.execute("""
                     INSERT INTO ingested_files
-                    (file_path, content_hash, source_type, chunk_count, file_size, ingested_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (file_path, content_hash, source_type, chunk_count, file_size, now, now))
+                    (file_path, content_hash, source_type, chunk_count, file_size, ingested_at, updated_at, chunk_ids)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (file_path, content_hash, source_type, chunk_count, file_size, now, now, chunk_ids_json))
 
             conn.commit()
 

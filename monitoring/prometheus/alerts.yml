@@ -1,0 +1,336 @@
+# Prometheus Alerting Rules for RAG System
+# These rules monitor the health, performance, and reliability of the RAG pipeline
+#
+# Alert Severity Levels:
+#   critical - Immediate attention required, service degradation
+#   warning  - Should be investigated soon, potential issues
+#   info     - Informational, for capacity planning
+
+groups:
+  # ============================================================================
+  # Critical Alerts - Service Availability
+  # ============================================================================
+  - name: rag-critical
+    rules:
+      # Backend Health
+      - alert: RAGBackendDown
+        expr: up{job="rag-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "RAG Backend is down"
+          description: "The RAG backend service has been unreachable for more than 2 minutes. All API endpoints are unavailable."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#rag-backend-down"
+
+      # Ollama LLM Service
+      - alert: OllamaDown
+        expr: up{job="ollama"} == 0 or ollama_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: ollama
+        annotations:
+          summary: "Ollama LLM service is down"
+          description: "Ollama has been unreachable for more than 2 minutes. LLM inference is unavailable."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#ollama-down"
+
+      # Qdrant Vector Database
+      - alert: QdrantDown
+        expr: up{job="qdrant"} == 0 or qdrant_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: qdrant
+        annotations:
+          summary: "Qdrant vector database is down"
+          description: "Qdrant has been unreachable for more than 2 minutes. Vector search and document retrieval are unavailable."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#qdrant-down"
+
+      # Circuit Breaker Open (service protection triggered)
+      - alert: CircuitBreakerOpen
+        expr: rag_circuit_breaker_state{state="open"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: "{{ $labels.service }}"
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.service }}"
+          description: "Circuit breaker for {{ $labels.service }} has been in open state for more than 5 minutes. The service may be experiencing persistent failures."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#circuit-breaker-open"
+
+      # Backend Health Check Endpoint Failing
+      - alert: RAGHealthCheckFailing
+        expr: rag_health_check_status == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "RAG health check is failing"
+          description: "The /api/health endpoint is reporting unhealthy status for more than 2 minutes."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#health-check-failing"
+
+  # ============================================================================
+  # Warning Alerts - Performance and Quality
+  # ============================================================================
+  - name: rag-warning
+    rules:
+      # High Response Latency
+      - alert: HighResponseLatency
+        expr: histogram_quantile(0.95, sum(rate(rag_request_duration_seconds_bucket{endpoint="/api/chat"}[5m])) by (le)) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High response latency detected"
+          description: "P95 response time for /api/chat has been above 10 seconds for more than 5 minutes. Current value: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-latency"
+
+      # Low Retrieval Quality
+      - alert: LowRetrievalQuality
+        expr: avg(rag_retrieval_score) < 0.4
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "Low retrieval quality detected"
+          description: "Average retrieval score has been below 0.4 for more than 10 minutes. Current average: {{ $value | printf \"%.2f\" }}. This may indicate poor document matching."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#low-retrieval-quality"
+
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: |
+          (sum(rate(rag_requests_total{status=~"5.."}[5m])) / sum(rate(rag_requests_total[5m]))) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate has been above 5% for more than 5 minutes. Current rate: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-error-rate"
+
+      # Redis Down (conversation memory unavailable)
+      - alert: RedisDown
+        expr: up{job="redis"} == 0 or redis_up == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been unreachable for more than 5 minutes. Conversation history and caching are unavailable."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#redis-down"
+
+      # Reranker Service Failing
+      - alert: RerankerDown
+        expr: rag_reranker_status == 0 and rag_reranker_enabled == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: reranker
+        annotations:
+          summary: "Reranker service is failing"
+          description: "The reranker service has been unavailable for more than 5 minutes while enabled. Query results may have lower quality."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#reranker-down"
+
+      # High Web Search Fallback Rate
+      - alert: HighWebSearchFallbackRate
+        expr: |
+          (sum(rate(rag_web_search_triggered_total[10m])) / sum(rate(rag_requests_total{endpoint="/api/chat"}[10m]))) * 100 > 30
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High web search fallback rate"
+          description: "Web search fallback is triggering for more than 30% of requests over 10 minutes. Current rate: {{ $value | printf \"%.1f\" }}%. This may indicate retrieval issues."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-web-search-fallback"
+
+      # Slow LLM Inference
+      - alert: SlowLLMInference
+        expr: histogram_quantile(0.95, sum(rate(rag_llm_inference_duration_seconds_bucket[5m])) by (le, model)) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: ollama
+        annotations:
+          summary: "Slow LLM inference for {{ $labels.model }}"
+          description: "P95 LLM inference time for {{ $labels.model }} has been above 30 seconds for more than 5 minutes. Current value: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#slow-llm-inference"
+
+      # High Queue Depth
+      - alert: HighRequestQueueDepth
+        expr: rag_request_queue_depth > 50
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High request queue depth"
+          description: "Request queue depth has been above 50 for more than 5 minutes. Current depth: {{ $value }}. Consider scaling backend instances."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-queue-depth"
+
+      # PostgreSQL Down
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0 or pg_up == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL has been unreachable for more than 5 minutes. Metadata storage and analytics are unavailable."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#postgres-down"
+
+  # ============================================================================
+  # Info Alerts - Resource Usage and Capacity
+  # ============================================================================
+  - name: rag-info
+    rules:
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 80
+        for: 10m
+        labels:
+          severity: info
+          resource: memory
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage has been above 80% for more than 10 minutes. Current usage: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-memory"
+
+      # High CPU Usage
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: info
+          resource: cpu
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage has been above 80% for more than 10 minutes. Current usage: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#high-cpu"
+
+      # Low Disk Space
+      - alert: LowDiskSpace
+        expr: |
+          (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100 > 85
+        for: 10m
+        labels:
+          severity: info
+          resource: disk
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk usage has been above 85% for more than 10 minutes. Current usage: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#low-disk-space"
+
+      # Container Memory Usage (Docker-specific)
+      - alert: ContainerHighMemory
+        expr: |
+          (container_memory_usage_bytes{name=~"rag-backend|ollama|qdrant|redis"} / container_spec_memory_limit_bytes{name=~"rag-backend|ollama|qdrant|redis"}) * 100 > 80
+        for: 10m
+        labels:
+          severity: info
+          resource: container_memory
+        annotations:
+          summary: "High memory usage in container {{ $labels.name }}"
+          description: "Container {{ $labels.name }} memory usage has been above 80% of its limit for more than 10 minutes. Current usage: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#container-high-memory"
+
+      # Qdrant Collection Size Growing
+      - alert: QdrantCollectionLarge
+        expr: qdrant_collection_points_count{collection="devops_docs"} > 100000
+        for: 1h
+        labels:
+          severity: info
+          service: qdrant
+        annotations:
+          summary: "Qdrant collection is large"
+          description: "The devops_docs collection has {{ $value }} points. Consider optimizing or archiving old documents."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#qdrant-large-collection"
+
+      # Redis Memory Usage
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 80
+        for: 10m
+        labels:
+          severity: info
+          service: redis
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is at {{ $value | printf \"%.1f\" }}% of maximum. Old conversations may be evicted soon."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#redis-high-memory"
+
+      # Low Request Rate (potential issue or normal low traffic)
+      - alert: LowRequestRate
+        expr: sum(rate(rag_requests_total[1h])) < 1
+        for: 1h
+        labels:
+          severity: info
+          service: backend
+        annotations:
+          summary: "Low request rate"
+          description: "Less than 1 request per second average over the last hour. This may be normal during off-hours or indicate connectivity issues."
+
+  # ============================================================================
+  # RAG-Specific Quality Alerts
+  # ============================================================================
+  - name: rag-quality
+    rules:
+      # No Documents Retrieved
+      - alert: NoDocumentsRetrieved
+        expr: |
+          (sum(rate(rag_retrieval_empty_results_total[10m])) / sum(rate(rag_requests_total{endpoint="/api/chat"}[10m]))) * 100 > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High rate of empty retrieval results"
+          description: "More than 10% of queries are returning no documents. Current rate: {{ $value | printf \"%.1f\" }}%. Check if the vector database is properly indexed."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#empty-retrieval"
+
+      # HyDE Expansion Failing
+      - alert: HyDEExpansionFailing
+        expr: |
+          (sum(rate(rag_hyde_failures_total[10m])) / sum(rate(rag_hyde_attempts_total[10m]))) * 100 > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High HyDE expansion failure rate"
+          description: "More than 20% of HyDE expansions are failing. Current rate: {{ $value | printf \"%.1f\" }}%. LLM may be overloaded."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#hyde-failing"
+
+      # Embedding Generation Slow
+      - alert: SlowEmbeddingGeneration
+        expr: histogram_quantile(0.95, sum(rate(rag_embedding_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "Slow embedding generation"
+          description: "P95 embedding generation time is above 2 seconds. Current value: {{ $value | humanizeDuration }}. CPU may be overloaded."
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#slow-embeddings"
+
+      # Streaming Errors
+      - alert: HighStreamingErrorRate
+        expr: |
+          (sum(rate(rag_streaming_errors_total[5m])) / sum(rate(rag_requests_total{endpoint="/api/chat/stream"}[5m]))) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "High streaming error rate"
+          description: "More than 5% of streaming requests are failing. Current rate: {{ $value | printf \"%.1f\" }}%"
+          runbook_url: "https://github.com/your-org/ai-rag-stack/wiki/Runbooks#streaming-errors"

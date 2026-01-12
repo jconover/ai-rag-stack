@@ -1,0 +1,175 @@
+# Alertmanager Configuration for RAG System
+# Documentation: https://prometheus.io/docs/alerting/latest/configuration/
+#
+# This configuration provides:
+# - Grouped alerts by severity and service
+# - Silencing of related alerts during incidents
+# - Multiple notification channels (configure as needed)
+
+global:
+  # Default SMTP settings (uncomment and configure for email notifications)
+  # smtp_smarthost: 'smtp.example.com:587'
+  # smtp_from: 'alertmanager@example.com'
+  # smtp_auth_username: 'alertmanager@example.com'
+  # smtp_auth_password: 'your-password'
+  # smtp_require_tls: true
+
+  # Slack API URL (uncomment and configure for Slack notifications)
+  # slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+  # Default resolve timeout
+  resolve_timeout: 5m
+
+# Templates for notification formatting
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Alert routing tree
+route:
+  # Default receiver
+  receiver: 'default-receiver'
+
+  # Group alerts by these labels
+  group_by: ['alertname', 'severity', 'service']
+
+  # Wait time before sending first notification for a new group
+  group_wait: 30s
+
+  # Wait time before sending notification about new alerts in existing group
+  group_interval: 5m
+
+  # Wait time before resending notification about an alert
+  repeat_interval: 4h
+
+  # Child routes for specific alert handling
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # Warning alerts - grouped notification
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 1m
+      repeat_interval: 2h
+      continue: true
+
+    # Info alerts - batched daily
+    - match:
+        severity: info
+      receiver: 'info-alerts'
+      group_wait: 10m
+      repeat_interval: 24h
+
+    # Service-specific routing
+    - match:
+        service: ollama
+      receiver: 'llm-team'
+      continue: false
+
+    - match:
+        service: qdrant
+      receiver: 'data-team'
+      continue: false
+
+# Inhibition rules - suppress alerts when related alerts are firing
+inhibit_rules:
+  # If backend is down, suppress all backend-related warnings
+  - source_match:
+      alertname: 'RAGBackendDown'
+    target_match:
+      service: 'backend'
+    target_match_re:
+      severity: 'warning|info'
+    equal: ['instance']
+
+  # If Ollama is down, suppress LLM-related warnings
+  - source_match:
+      alertname: 'OllamaDown'
+    target_match_re:
+      alertname: 'SlowLLMInference|HyDEExpansionFailing'
+    equal: ['instance']
+
+  # If Qdrant is down, suppress retrieval-related warnings
+  - source_match:
+      alertname: 'QdrantDown'
+    target_match_re:
+      alertname: 'LowRetrievalQuality|NoDocumentsRetrieved'
+    equal: ['instance']
+
+  # If Redis is down, suppress redis-related info alerts
+  - source_match:
+      alertname: 'RedisDown'
+    target_match:
+      alertname: 'RedisHighMemory'
+    equal: ['instance']
+
+# Receivers - notification endpoints
+receivers:
+  # Default receiver (logs to stdout for testing)
+  - name: 'default-receiver'
+    # Uncomment below for webhook notifications
+    # webhook_configs:
+    #   - url: 'http://your-webhook-endpoint/alerts'
+    #     send_resolved: true
+
+  # Critical alerts receiver
+  - name: 'critical-alerts'
+    # Email notifications (uncomment and configure)
+    # email_configs:
+    #   - to: 'oncall@example.com'
+    #     send_resolved: true
+    #     headers:
+    #       Subject: '[CRITICAL] {{ .GroupLabels.alertname }} - RAG System'
+
+    # Slack notifications (uncomment and configure)
+    # slack_configs:
+    #   - channel: '#alerts-critical'
+    #     send_resolved: true
+    #     title: '{{ if eq .Status "firing" }}CRITICAL{{ else }}RESOLVED{{ end }}: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    #     color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+
+    # PagerDuty (uncomment and configure)
+    # pagerduty_configs:
+    #   - service_key: 'your-pagerduty-service-key'
+    #     send_resolved: true
+
+  # Warning alerts receiver
+  - name: 'warning-alerts'
+    # Slack notifications (uncomment and configure)
+    # slack_configs:
+    #   - channel: '#alerts-warning'
+    #     send_resolved: true
+    #     title: '{{ if eq .Status "firing" }}WARNING{{ else }}RESOLVED{{ end }}: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    #     color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+
+  # Info alerts receiver
+  - name: 'info-alerts'
+    # Slack notifications (uncomment and configure)
+    # slack_configs:
+    #   - channel: '#alerts-info'
+    #     send_resolved: true
+    #     title: 'INFO: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    #     color: '{{ if eq .Status "firing" }}#439FE0{{ else }}good{{ end }}'
+
+  # LLM team receiver (for Ollama-related alerts)
+  - name: 'llm-team'
+    # Configure team-specific notifications
+    # slack_configs:
+    #   - channel: '#llm-team'
+    #     send_resolved: true
+
+  # Data team receiver (for Qdrant/Redis-related alerts)
+  - name: 'data-team'
+    # Configure team-specific notifications
+    # slack_configs:
+    #   - channel: '#data-team'
+    #     send_resolved: true

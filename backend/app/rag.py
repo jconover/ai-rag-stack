@@ -5,6 +5,7 @@ This module implements a production-ready RAG pipeline with:
 - Optional cross-encoder reranking for improved relevance
 - Comprehensive metrics logging for observability
 - Streaming response support
+- Circuit breaker protection for external service calls
 
 Flow:
     Query -> Vector Search (top 20) -> Rerank (top 5) -> Build Context -> LLM
@@ -22,6 +23,12 @@ from app.reranker import rerank_documents, get_reranker
 from app.metrics import retrieval_metrics_logger, RetrievalTimer, RetrievalMetrics
 from app.query_expansion import hyde_expander
 from app.web_search import web_searcher
+from app.circuit_breaker import (
+    ollama_circuit_breaker,
+    CircuitBreakerOpen,
+    is_circuit_breaker_exception,
+    get_service_unavailable_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -689,16 +696,20 @@ Question: {query}"""
         # Build messages with proper system/user separation
         messages = self._build_messages(query, context_str)
 
-        # Generate response using Ollama
+        # Generate response using Ollama with circuit breaker protection
         try:
-            response = ollama.chat(
-                model=model,
-                messages=messages,
-                options={
-                    'temperature': temperature,
-                    'num_predict': max_tokens,
-                }
-            )
+            # Wrap the Ollama call with circuit breaker
+            def _call_ollama():
+                return ollama.chat(
+                    model=model,
+                    messages=messages,
+                    options={
+                        'temperature': temperature,
+                        'num_predict': max_tokens,
+                    }
+                )
+
+            response = ollama_circuit_breaker.call(_call_ollama)
 
             answer = response['message']['content']
 
@@ -720,20 +731,35 @@ Question: {query}"""
 
             return result
 
+        except CircuitBreakerOpen as e:
+            # Provide user-friendly error for circuit breaker open
+            raise Exception(get_service_unavailable_message(e))
         except Exception as e:
             raise Exception("Error generating response: {}".format(str(e)))
     
     def list_models(self) -> List[Dict[str, Any]]:
-        """List available Ollama models"""
+        """List available Ollama models with circuit breaker protection."""
         try:
-            models = ollama.list()
+            # Use circuit breaker for Ollama list call
+            def _list_models():
+                return ollama.list()
+
+            models = ollama_circuit_breaker.call(_list_models)
             return models.get('models', [])
-        except Exception as e:
-            print(f"Error listing models: {e}")
+        except CircuitBreakerOpen:
+            logger.warning("Ollama circuit breaker is open, cannot list models")
             return []
-    
+        except Exception as e:
+            logger.error(f"Error listing models: {e}")
+            return []
+
     def is_ollama_connected(self) -> bool:
-        """Check if Ollama is accessible"""
+        """Check if Ollama is accessible (respects circuit breaker state)."""
+        # Check circuit breaker state first
+        cb_state = ollama_circuit_breaker.state
+        if cb_state.value == "open":
+            return False
+
         try:
             ollama.list()
             return True
@@ -749,20 +775,33 @@ Question: {query}"""
         queue: asyncio.Queue,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
-        """Run synchronous Ollama streaming in a thread and put results in async queue.
+        """Run synchronous Ollama streaming in a thread with circuit breaker protection.
 
         This method runs in a separate thread to avoid blocking the event loop.
+        Uses circuit breaker to fail fast if Ollama is known to be unavailable.
         """
         try:
-            stream = ollama.chat(
-                model=model,
-                messages=messages,
-                options={
-                    'temperature': temperature,
-                    'num_predict': max_tokens,
-                },
-                stream=True
-            )
+            # Check circuit breaker state before attempting stream
+            cb_state = ollama_circuit_breaker.state
+            if cb_state.value == "open":
+                raise CircuitBreakerOpen(
+                    "ollama",
+                    ollama_circuit_breaker.config.reset_timeout_seconds
+                )
+
+            # Wrap streaming in circuit breaker call for failure tracking
+            def _create_stream():
+                return ollama.chat(
+                    model=model,
+                    messages=messages,
+                    options={
+                        'temperature': temperature,
+                        'num_predict': max_tokens,
+                    },
+                    stream=True
+                )
+
+            stream = ollama_circuit_breaker.call(_create_stream)
 
             for chunk in stream:
                 if chunk.get('message', {}).get('content'):
@@ -775,6 +814,12 @@ Question: {query}"""
             # Signal completion
             loop.call_soon_threadsafe(queue.put_nowait, {'type': 'done'})
 
+        except CircuitBreakerOpen as e:
+            error_msg = get_service_unavailable_message(e)
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {'type': 'error', 'error': error_msg}
+            )
         except Exception as e:
             loop.call_soon_threadsafe(
                 queue.put_nowait,

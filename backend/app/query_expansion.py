@@ -177,18 +177,26 @@ class HyDEExpander:
     }
 
     # DevOps-focused prompt template for generating hypothetical documents
-    HYDE_PROMPT_TEMPLATE = """You are a DevOps documentation writer. Given a user's question about DevOps, infrastructure, or cloud technologies, write a concise documentation excerpt that would directly answer the question.
+    # Optimized for retrieval quality: matches documentation style in vector store
+    HYDE_PROMPT_TEMPLATE = """Write a 150-200 word technical documentation excerpt answering this DevOps question. Write in present tense, declarative style.
 
-Write as if you are creating technical documentation. Include:
-- Specific technical details and configurations
-- Relevant commands or code snippets where appropriate
-- Best practices if applicable
+Requirements:
+- Use specific technical terminology (e.g., "Pod", "ConfigMap", "terraform plan", "docker build")
+- Include at least one concrete example: a CLI command, YAML snippet, or configuration block
+- Reference actual tool names, flags, file paths, or environment variables
+- State facts directly without hedging ("X does Y" not "X can help with Y")
 
-Do NOT include phrases like "This document explains..." or "In this guide...". Just write the actual content.
+Forbidden:
+- Meta-commentary ("This document...", "In this guide...", "Let me explain...")
+- Filler phrases ("It's important to note...", "One thing to consider...")
+- Rhetorical questions
+- First/second person ("I", "you", "we")
 
-User Question: {query}
+Domain focus: Kubernetes, Docker, Terraform, Ansible, Helm, AWS/GCP/Azure, CI/CD pipelines, monitoring (Prometheus/Grafana), GitOps, Linux administration.
 
-Documentation Excerpt:"""
+Question: {query}
+
+Documentation:"""
 
     def __init__(self, config: Optional[HyDEConfig] = None):
         """Initialize the HyDE expander.
