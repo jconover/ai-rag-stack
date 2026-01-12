@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     hyde_max_query_length: int = int(os.getenv("HYDE_MAX_QUERY_LENGTH", "500"))
     hyde_timeout_seconds: float = float(os.getenv("HYDE_TIMEOUT_SECONDS", "10.0"))
 
+    # Conversation Context - use conversation history to improve retrieval for follow-up questions
+    conversation_context_enabled: bool = os.getenv("CONVERSATION_CONTEXT_ENABLED", "true").lower() == "true"
+    conversation_context_history_limit: int = int(os.getenv("CONVERSATION_CONTEXT_HISTORY_LIMIT", "3"))
+    conversation_context_min_query_length: int = int(os.getenv("CONVERSATION_CONTEXT_MIN_QUERY_LENGTH", "5"))
+    conversation_context_max_terms: int = int(os.getenv("CONVERSATION_CONTEXT_MAX_TERMS", "10"))
+
     # Web Search Fallback (Tavily) - triggers when local retrieval scores are low
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
     web_search_api_key: str = os.getenv("TAVILY_API_KEY", "")
@@ -78,6 +84,10 @@ class Settings(BaseSettings):
     # Metrics and logging
     enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
     log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"
+
+    # Output validation and hallucination detection
+    output_validation_enabled: bool = os.getenv("OUTPUT_VALIDATION_ENABLED", "true").lower() == "true"
+    output_validation_min_confidence: float = float(os.getenv("OUTPUT_VALIDATION_MIN_CONFIDENCE", "0.5"))
     
     # API
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
@@ -113,6 +123,24 @@ class Settings(BaseSettings):
     session_expire_hours: int = int(os.getenv("SESSION_EXPIRE_HOURS", 24))
     api_key_prefix: str = os.getenv("API_KEY_PREFIX", "rag_")
     require_email_verification: bool = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+
+    # OpenTelemetry Distributed Tracing Configuration
+    tracing_enabled: bool = os.getenv("TRACING_ENABLED", "false").lower() == "true"
+    # Exporter type: "otlp" for OTLP/gRPC (Jaeger, etc.), "console" for stdout
+    tracing_exporter: str = os.getenv("TRACING_EXPORTER", "console")
+    # OTLP endpoint for sending traces (default: Jaeger OTLP gRPC port)
+    tracing_otlp_endpoint: str = os.getenv("TRACING_OTLP_ENDPOINT", "http://localhost:4317")
+    # Service name for trace identification
+    tracing_service_name: str = os.getenv("TRACING_SERVICE_NAME", "devops-ai-assistant")
+    # Sampling ratio (0.0 to 1.0) - 1.0 means trace all requests
+    tracing_sample_rate: float = float(os.getenv("TRACING_SAMPLE_RATE", "1.0"))
+
+    # Real-time Analytics Configuration
+    analytics_enabled: bool = os.getenv("ANALYTICS_ENABLED", "true").lower() == "true"
+    analytics_short_window_seconds: int = int(os.getenv("ANALYTICS_SHORT_WINDOW_SECONDS", 300))  # 5 minutes
+    analytics_long_window_seconds: int = int(os.getenv("ANALYTICS_LONG_WINDOW_SECONDS", 3600))  # 1 hour
+    analytics_endpoint_protected: bool = os.getenv("ANALYTICS_ENDPOINT_PROTECTED", "false").lower() == "true"
+    analytics_api_key: str = os.getenv("ANALYTICS_API_KEY", "")
 
     @property
     def postgres_url(self) -> str:

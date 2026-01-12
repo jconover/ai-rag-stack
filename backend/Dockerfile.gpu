@@ -1,8 +1,10 @@
 # =============================================================================
-# GPU-Accelerated Dockerfile for DevOps AI Assistant
+# GPU-Accelerated Multi-Stage Dockerfile for DevOps AI Assistant
 # =============================================================================
 # This Dockerfile includes CUDA support for GPU-accelerated embeddings
 # and reranking. Use this when deploying on NVIDIA GPU-equipped machines.
+#
+# Optimized with multi-stage builds for minimal runtime image size.
 #
 # Build:
 #   docker build -f Dockerfile.gpu -t devops-ai-assistant:gpu .
@@ -15,28 +17,34 @@
 #   - NVIDIA GPU with CUDA support
 # =============================================================================
 
-# Use NVIDIA CUDA base image with Python
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+# -----------------------------------------------------------------------------
+# Stage 1: Builder - Install dependencies and compile native extensions
+# -----------------------------------------------------------------------------
+FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS builder
 
-# Set environment variables
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV EMBEDDING_DEVICE=cuda
-ENV CUDA_VISIBLE_DEVICES=0
+# Prevent interactive prompts and set Python environment
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-WORKDIR /app
+WORKDIR /build
 
-# Install Python 3.11 and system dependencies
-RUN apt-get update && apt-get install -y \
+# Install Python 3.11 and build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
+    python3.11-dev \
     python3-pip \
     build-essential \
-    curl \
     git \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Create virtual environment for clean dependency isolation
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements
 COPY requirements.txt requirements-gpu.txt ./
@@ -44,22 +52,80 @@ COPY requirements.txt requirements-gpu.txt ./
 # Install PyTorch with CUDA 12.1 support
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121
 
-# Install remaining dependencies (skips torch since already installed)
-RUN pip install --no-cache-dir -r requirements.txt
+# Install production dependencies (exclude dev/test packages)
+RUN grep -v -E '^(pytest|black|ruff|mypy|pre-commit)' requirements.txt > requirements-prod.txt && \
+    pip install --no-cache-dir -r requirements-prod.txt
 
 # Download spaCy English model for semantic chunking
 RUN python -m spacy download en_core_web_sm
 
 # Download NLTK data for text processing
-RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True)"
+RUN python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)"
 
-# Copy application code
-COPY . .
+# Clean up unnecessary files from installed packages
+RUN find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.pyc" -delete 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.pyo" -delete 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.c" -delete 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.h" -delete 2>/dev/null || true && \
+    rm -rf /opt/venv/lib/python3.11/site-packages/pip* && \
+    rm -rf /opt/venv/lib/python3.11/site-packages/setuptools* && \
+    rm -rf /opt/venv/lib/python3.11/site-packages/wheel*
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime - Minimal CUDA runtime image
+# -----------------------------------------------------------------------------
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04 AS runtime
+
+# Environment variables for GPU and Python
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONHASHSEED=random \
+    EMBEDDING_DEVICE=cuda \
+    CUDA_VISIBLE_DEVICES=0 \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Install Python 3.11 runtime and minimal dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /tmp/* /var/tmp/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy NLTK data from builder
+COPY --from=builder /root/nltk_data /root/nltk_data
 
 # Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
+RUN useradd --create-home --shell /bin/bash --uid 1000 appuser
+
+# Copy NLTK data to user home
+RUN mkdir -p /home/appuser/nltk_data && \
+    cp -r /root/nltk_data/* /home/appuser/nltk_data/ && \
+    rm -rf /root/nltk_data
+
+# Copy only application code
+COPY --chown=appuser:appuser app/ ./app/
+
+# Set ownership of nltk_data
+RUN chown -R appuser:appuser /home/appuser/nltk_data
+
+# Switch to non-root user
 USER appuser
+
+# Set NLTK data path for the user
+ENV NLTK_DATA=/home/appuser/nltk_data
 
 # Expose port
 EXPOSE 8000

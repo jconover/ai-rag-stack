@@ -1,0 +1,119 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: ai-rag-stack
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: ai-rag-stack
+data:
+  # Ollama Configuration
+  OLLAMA_HOST: "http://ollama:11434"
+  OLLAMA_DEFAULT_MODEL: "llama3.1:8b"
+
+  # Qdrant Vector Database
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  QDRANT_COLLECTION_NAME: "devops_docs"
+
+  # Embedding Model Configuration
+  EMBEDDING_MODEL: "BAAI/bge-base-en-v1.5"
+  EMBEDDING_DIMENSION: "768"
+  EMBEDDING_DEVICE: "cuda"
+  RERANKER_DEVICE: "cuda"
+
+  # Redis Configuration
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_MAX_CONNECTIONS: "50"
+  REDIS_SOCKET_TIMEOUT: "5.0"
+  REDIS_SOCKET_CONNECT_TIMEOUT: "5.0"
+
+  # PostgreSQL Configuration
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "ragdb"
+
+  # RAG Configuration
+  CHUNK_SIZE: "1000"
+  CHUNK_OVERLAP: "200"
+  TOP_K_RESULTS: "5"
+  CONTEXT_WINDOW: "4096"
+
+  # API Configuration
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  LOG_LEVEL: "info"
+  PYTHONUNBUFFERED: "1"
+
+  # Document Ingestion
+  DOCS_DIR: "/data/docs"
+  CUSTOM_DOCS_DIR: "/data/custom"
+  MAX_WORKERS: "4"
+
+  # Monitoring Configuration
+  ENABLE_PROMETHEUS_METRICS: "true"
+  ENABLE_RETRIEVAL_METRICS: "true"
+
+  # Hybrid Search Configuration
+  HYBRID_SEARCH_ENABLED: "true"
+  HYBRID_SEARCH_ALPHA: "0.5"
+  HYBRID_RRF_K: "60"
+  SPARSE_ENCODER_MODEL: "Qdrant/bm25"
+
+  # HyDE Configuration
+  HYDE_ENABLED: "true"
+  HYDE_MODEL: "llama3.1:8b"
+  HYDE_TEMPERATURE: "0.3"
+  HYDE_MAX_TOKENS: "256"
+  HYDE_TIMEOUT_SECONDS: "10.0"
+
+  # Web Search Configuration
+  WEB_SEARCH_ENABLED: "false"
+  WEB_SEARCH_MIN_SCORE_THRESHOLD: "0.4"
+  WEB_SEARCH_MAX_RESULTS: "5"
+  WEB_SEARCH_TIMEOUT_SECONDS: "10.0"
+
+  # A/B Testing Configuration
+  AB_TESTING_ENABLED: "true"
+  AB_TESTING_AUTO_RECORD_METRICS: "true"
+
+  # Authentication Configuration
+  AUTH_ENABLED: "false"
+  SESSION_EXPIRE_HOURS: "24"
+  API_KEY_PREFIX: "rag_"
+  REQUIRE_EMAIL_VERIFICATION: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qdrant-config
+  namespace: ai-rag-stack
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: ai-rag-stack
+data:
+  QDRANT__SERVICE__GRPC_PORT: "6334"
+  QDRANT__SERVICE__MAX_SEARCH_THREADS: "4"
+  QDRANT__STORAGE__MMAP_ADVICE: "random"
+  QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: "64"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: ai-rag-stack
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: ai-rag-stack
+data:
+  redis.conf: |
+    appendonly yes
+    maxmemory 2gb
+    maxmemory-policy allkeys-lru
+    maxclients 1000

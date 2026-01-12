@@ -22,6 +22,26 @@ class SourceDocument(BaseModel):
     rank: Optional[int] = Field(None, description="Final rank position")
 
 
+class ValidationIssue(BaseModel):
+    """A single validation issue detected in the response"""
+    code: str = Field(..., description="Machine-readable issue code")
+    message: str = Field(..., description="Human-readable description")
+    severity: str = Field(..., description="Issue severity: info, warning, error")
+    snippet: Optional[str] = Field(None, description="Relevant text snippet")
+
+
+class OutputValidation(BaseModel):
+    """Output validation and hallucination detection results"""
+    is_valid: bool = Field(True, description="Whether response passed validation")
+    confidence_score: float = Field(..., ge=0.0, le=1.0, description="Confidence score (0-1)")
+    issues_count: int = Field(0, description="Number of issues detected")
+    issues: List[ValidationIssue] = Field(default_factory=list, description="List of validation issues")
+    source_citation_count: int = Field(0, description="Number of source citations found")
+    unsupported_claims_count: int = Field(0, description="Number of unsupported claims detected")
+    hallucination_markers_found: List[str] = Field(default_factory=list, description="Detected hallucination markers")
+    validation_time_ms: float = Field(0.0, description="Time taken for validation in ms")
+
+
 class RetrievalMetrics(BaseModel):
     """Metrics about the retrieval process"""
     initial_candidates: int = Field(..., description="Number of initial vector search results")
@@ -49,6 +69,7 @@ class ChatResponse(BaseModel):
     sources: Optional[List[Dict[str, Any]]] = Field(None, description="Source documents used")
     session_id: str = Field(..., description="Session ID")
     retrieval_metrics: Optional[RetrievalMetrics] = Field(None, description="Retrieval performance metrics")
+    output_validation: Optional[OutputValidation] = Field(None, description="Output validation and hallucination detection results")
 
 
 class ComponentStatus(BaseModel):
@@ -462,3 +483,119 @@ class LivenessResponse(BaseModel):
     """Simple liveness probe response"""
     alive: bool = Field(True, description="Whether the application process is running")
     timestamp: str = Field(..., description="Current server timestamp (ISO format)")
+
+
+# =====================
+# Prompt Template Models
+# =====================
+
+class TemplateVariable(BaseModel):
+    """Definition of a variable in a prompt template"""
+    name: str = Field(..., description="Variable name used in the template (e.g., 'pod_name')")
+    type: str = Field("string", description="Variable type: string, number, boolean, select")
+    description: Optional[str] = Field(None, description="Human-readable description of what this variable represents")
+    required: bool = Field(False, description="Whether this variable must be provided")
+    default: Optional[Any] = Field(None, description="Default value if not provided")
+    options: Optional[List[str]] = Field(None, description="Allowed values for 'select' type variables")
+    placeholder: Optional[str] = Field(None, description="Placeholder text to show in UI")
+
+
+class PromptTemplate(BaseModel):
+    """Prompt template with variable support"""
+    id: str = Field(..., description="Unique template identifier")
+    category: str = Field(..., description="Template category (e.g., 'Kubernetes', 'Docker')")
+    title: str = Field(..., description="Human-readable template title")
+    description: str = Field(..., description="Description of what this template does")
+    prompt: str = Field(..., description="Template prompt with {variable} placeholders")
+    variables: List[TemplateVariable] = Field(
+        default_factory=list,
+        description="List of variables that can be customized in this template"
+    )
+
+
+class RenderTemplateRequest(BaseModel):
+    """Request to render a template with variable substitutions"""
+    template_id: str = Field(..., description="ID of the template to render")
+    variables: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Variable name to value mapping for substitution"
+    )
+
+
+class RenderTemplateResponse(BaseModel):
+    """Response with rendered template prompt"""
+    template_id: str = Field(..., description="ID of the rendered template")
+    original_prompt: str = Field(..., description="Original template prompt with placeholders")
+    rendered_prompt: str = Field(..., description="Rendered prompt with variables substituted")
+    variables_used: Dict[str, Any] = Field(..., description="Variables that were substituted")
+    missing_required: List[str] = Field(
+        default_factory=list,
+        description="Required variables that were not provided (rendered with defaults/placeholders)"
+    )
+
+
+class TemplatesResponse(BaseModel):
+    """Response for listing templates"""
+    templates: List[PromptTemplate] = Field(..., description="List of prompt templates")
+    categories: List[str] = Field(..., description="All available categories")
+
+
+# =====================
+# Real-time Analytics Models
+# =====================
+
+class LatencyMetrics(BaseModel):
+    """Latency statistics over a time window"""
+    avg_ms: Optional[float] = Field(None, description="Average latency in milliseconds")
+    median_ms: Optional[float] = Field(None, description="Median (p50) latency in milliseconds")
+    p95_ms: Optional[float] = Field(None, description="95th percentile latency in milliseconds")
+    p99_ms: Optional[float] = Field(None, description="99th percentile latency in milliseconds")
+    min_ms: Optional[float] = Field(None, description="Minimum latency in milliseconds")
+    max_ms: Optional[float] = Field(None, description="Maximum latency in milliseconds")
+
+
+class RequestMetrics(BaseModel):
+    """Request rate and error metrics"""
+    requests_per_minute: float = Field(..., description="Request rate per minute")
+    total_requests_in_window: int = Field(..., description="Total requests in measurement window")
+    error_rate_percent: float = Field(..., description="Error rate as percentage")
+
+
+class CacheMetrics(BaseModel):
+    """Embedding cache performance metrics"""
+    hit_rate_percent: float = Field(..., description="Cache hit rate as percentage")
+    hits_in_window: int = Field(..., description="Cache hits in measurement window")
+    misses_in_window: int = Field(..., description="Cache misses in measurement window")
+
+
+class RetrievalQualityMetrics(BaseModel):
+    """Retrieval quality score statistics"""
+    avg_score: Optional[float] = Field(None, description="Average similarity score")
+    median_score: Optional[float] = Field(None, description="Median similarity score")
+    min_score: Optional[float] = Field(None, description="Minimum similarity score")
+    max_score: Optional[float] = Field(None, description="Maximum similarity score")
+
+
+class ModelUsageStats(BaseModel):
+    """Usage statistics for a single model"""
+    count: int = Field(..., description="Number of requests using this model")
+    percentage: float = Field(..., description="Percentage of total requests")
+
+
+class TopQueryEntry(BaseModel):
+    """Anonymized top query entry"""
+    query_hash: str = Field(..., description="SHA256 hash of query (first 12 chars)")
+    count: int = Field(..., description="Number of times this query was made")
+    last_seen: str = Field(..., description="Last time this query was seen (ISO format)")
+
+
+class RealtimeAnalyticsResponse(BaseModel):
+    """Real-time analytics snapshot for operational visibility"""
+    timestamp: str = Field(..., description="Snapshot timestamp (ISO format)")
+    window_seconds: int = Field(..., description="Measurement window in seconds")
+    request_metrics: RequestMetrics = Field(..., description="Request rate and error metrics")
+    latency_metrics: LatencyMetrics = Field(..., description="Response latency statistics")
+    cache_metrics: CacheMetrics = Field(..., description="Embedding cache performance")
+    retrieval_quality: RetrievalQualityMetrics = Field(..., description="Retrieval similarity score metrics")
+    model_usage: Dict[str, ModelUsageStats] = Field(default_factory=dict, description="Model usage distribution")
+    top_queries: List[TopQueryEntry] = Field(default_factory=list, description="Top queries (anonymized, last hour)")

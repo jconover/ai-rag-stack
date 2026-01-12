@@ -2,394 +2,357 @@
 
 # DevOps Documentation Downloader
 # This script clones and organizes documentation from various DevOps tools
+# Supports parallel downloads with configurable concurrency
 
-set -e
-
+# Configuration
 DOCS_DIR="${1:-../data/docs}"
+PARALLEL_JOBS="${PARALLEL_JOBS:-4}"  # Default 4 concurrent downloads
+MAX_RETRIES="${MAX_RETRIES:-3}"      # Retry failed downloads up to 3 times
+RETRY_DELAY="${RETRY_DELAY:-5}"      # Seconds to wait between retries
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Create docs directory
 mkdir -p "$DOCS_DIR"
 
-echo "Downloading DevOps documentation to $DOCS_DIR..."
+# Temporary files for tracking progress
+PROGRESS_DIR=$(mktemp -d)
+FAILED_FILE="$PROGRESS_DIR/failed.log"
+SUCCESS_FILE="$PROGRESS_DIR/success.log"
+SKIPPED_FILE="$PROGRESS_DIR/skipped.log"
+touch "$FAILED_FILE" "$SUCCESS_FILE" "$SKIPPED_FILE"
 
-# Kubernetes Documentation
-echo "Downloading Kubernetes docs..."
-if [ ! -d "$DOCS_DIR/kubernetes" ]; then
-    git clone --depth 1 https://github.com/kubernetes/website.git "$DOCS_DIR/kubernetes"
-else
-    echo "Kubernetes docs already exist, skipping..."
-fi
+# Cleanup on exit
+cleanup() {
+    rm -rf "$PROGRESS_DIR"
+}
+trap cleanup EXIT
 
-# Kubernetes AI Documentation
-echo "Downloading Kubernetes AI docs..."
-if [ ! -d "$DOCS_DIR/kubernetes-ai" ]; then
-    # Clean up temp directories if they exist from a previous failed run
-    rm -rf "$DOCS_DIR/k8s-ai-src" "$DOCS_DIR/kubeflow-tmp"
-    git clone --depth 1 https://github.com/kubernetes-sigs/cluster-api.git "$DOCS_DIR/k8s-ai-src"
-    if [ -d "$DOCS_DIR/k8s-ai-src/docs" ]; then
-        mv "$DOCS_DIR/k8s-ai-src/docs" "$DOCS_DIR/kubernetes-ai"
-        rm -rf "$DOCS_DIR/k8s-ai-src"
+# Log functions with timestamps
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $(date '+%H:%M:%S') $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $(date '+%H:%M:%S') $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $(date '+%H:%M:%S') $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $(date '+%H:%M:%S') $1"
+}
+
+# Download function with retry logic
+# Usage: download_repo "name" "url" "target_dir" "extract_subdir" "temp_suffix"
+download_repo() {
+    local name="$1"
+    local url="$2"
+    local target_dir="$3"
+    local extract_subdir="$4"  # Optional: extract only this subdir
+    local temp_suffix="$5"     # Optional: temp directory suffix
+
+    local full_target="$DOCS_DIR/$target_dir"
+    local temp_dir=""
+
+    # Check if already exists
+    if [ -d "$full_target" ]; then
+        log_info "[$name] Already exists, skipping..."
+        echo "$name" >> "$SKIPPED_FILE"
+        return 0
     fi
-    # Also get kubeflow documentation for ML/AI on Kubernetes
-    git clone --depth 1 https://github.com/kubeflow/website.git "$DOCS_DIR/kubeflow-tmp" || \
-        echo "Warning: Could not clone Kubeflow docs"
-    if [ -d "$DOCS_DIR/kubeflow-tmp/content" ]; then
-        mkdir -p "$DOCS_DIR/kubernetes-ai/kubeflow"
-        mv "$DOCS_DIR/kubeflow-tmp/content" "$DOCS_DIR/kubernetes-ai/kubeflow/docs"
-        rm -rf "$DOCS_DIR/kubeflow-tmp"
+
+    # Determine if we need a temp directory
+    if [ -n "$extract_subdir" ]; then
+        temp_dir="$DOCS_DIR/${temp_suffix:-${target_dir}-src}"
+        rm -rf "$temp_dir" 2>/dev/null || true
     fi
-else
-    echo "Kubernetes AI docs already exist, skipping..."
-fi
 
-# Terraform Documentation
-echo "Downloading Terraform docs..."
-if [ ! -d "$DOCS_DIR/terraform" ]; then
-    git clone --depth 1 https://github.com/hashicorp/terraform-docs-common.git "$DOCS_DIR/terraform"
-else
-    echo "Terraform docs already exist, skipping..."
-fi
+    local attempt=0
+    local success=false
 
-# Docker Documentation
-echo "Downloading Docker docs..."
-if [ ! -d "$DOCS_DIR/docker" ]; then
-    git clone --depth 1 https://github.com/docker/docs.git "$DOCS_DIR/docker"
-else
-    echo "Docker docs already exist, skipping..."
-fi
+    while [ $attempt -lt $MAX_RETRIES ] && [ "$success" = false ]; do
+        attempt=$((attempt + 1))
 
-# Ansible Documentation
-echo "Downloading Ansible docs..."
-if [ ! -d "$DOCS_DIR/ansible" ]; then
-    git clone --depth 1 https://github.com/ansible/ansible-documentation.git "$DOCS_DIR/ansible"
-else
-    echo "Ansible docs already exist, skipping..."
-fi
+        if [ $attempt -gt 1 ]; then
+            log_warning "[$name] Retry $attempt of $MAX_RETRIES..."
+            sleep "$RETRY_DELAY"
+        fi
 
-# Prometheus Documentation
-echo "Downloading Prometheus docs..."
-if [ ! -d "$DOCS_DIR/prometheus" ]; then
-    git clone --depth 1 https://github.com/prometheus/docs.git "$DOCS_DIR/prometheus"
-else
-    echo "Prometheus docs already exist, skipping..."
-fi
+        log_info "[$name] Downloading from $url..."
 
-# Python Documentation
-echo "Downloading Python docs..."
-if [ ! -d "$DOCS_DIR/python" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/python-src"
-    git clone --depth 1 https://github.com/python/cpython.git "$DOCS_DIR/python-src"
-    # Extract just the Doc directory
-    if [ -d "$DOCS_DIR/python-src/Doc" ]; then
-        mv "$DOCS_DIR/python-src/Doc" "$DOCS_DIR/python"
-        rm -rf "$DOCS_DIR/python-src"
+        if [ -n "$extract_subdir" ]; then
+            # Clone to temp, extract subdir
+            if git clone --depth 1 --quiet "$url" "$temp_dir" 2>/dev/null; then
+                if [ -d "$temp_dir/$extract_subdir" ]; then
+                    mv "$temp_dir/$extract_subdir" "$full_target"
+                    rm -rf "$temp_dir"
+                    success=true
+                else
+                    log_warning "[$name] Subdir '$extract_subdir' not found in repo"
+                    rm -rf "$temp_dir"
+                fi
+            fi
+        else
+            # Clone directly to target
+            if git clone --depth 1 --quiet "$url" "$full_target" 2>/dev/null; then
+                success=true
+            fi
+        fi
+    done
+
+    if [ "$success" = true ]; then
+        log_success "[$name] Downloaded successfully"
+        echo "$name" >> "$SUCCESS_FILE"
+        return 0
+    else
+        log_error "[$name] Failed after $MAX_RETRIES attempts"
+        echo "$name" >> "$FAILED_FILE"
+        return 1
     fi
-else
-    echo "Python docs already exist, skipping..."
-fi
+}
 
-# Go Documentation
-echo "Downloading Go docs..."
-if [ ! -d "$DOCS_DIR/go" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/go-src"
-    git clone --depth 1 https://github.com/golang/go.git "$DOCS_DIR/go-src"
-    # Extract just the doc directory
-    if [ -d "$DOCS_DIR/go-src/doc" ]; then
-        mv "$DOCS_DIR/go-src/doc" "$DOCS_DIR/go"
-        rm -rf "$DOCS_DIR/go-src"
+# Download with curl (for non-git sources)
+download_curl() {
+    local name="$1"
+    local url="$2"
+    local target_file="$3"
+
+    local full_target="$DOCS_DIR/$target_file"
+    local target_dir=$(dirname "$full_target")
+
+    # Check if already exists
+    if [ -f "$full_target" ]; then
+        log_info "[$name] Already exists, skipping..."
+        echo "$name" >> "$SKIPPED_FILE"
+        return 0
     fi
-else
-    echo "Go docs already exist, skipping..."
-fi
 
-# Bash Documentation (GNU Bash manual)
-echo "Downloading Bash docs..."
-if [ ! -d "$DOCS_DIR/bash" ]; then
-    mkdir -p "$DOCS_DIR/bash"
-    # Download Bash reference manual
-    curl -o "$DOCS_DIR/bash/bash.html" https://www.gnu.org/software/bash/manual/bash.html || \
-        echo "Warning: Could not download Bash manual"
-    # Also get some advanced bash scripting guide
-    git clone --depth 1 https://github.com/denysdovhan/bash-handbook.git "$DOCS_DIR/bash/handbook" || \
-        echo "Warning: Could not clone bash handbook"
-else
-    echo "Bash docs already exist, skipping..."
-fi
+    mkdir -p "$target_dir"
 
-# Zsh Documentation
-echo "Downloading Zsh docs..."
-if [ ! -d "$DOCS_DIR/zsh" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/zsh-src"
-    mkdir -p "$DOCS_DIR/zsh"
-    # Clone Zsh source for documentation
-    git clone --depth 1 https://github.com/zsh-users/zsh.git "$DOCS_DIR/zsh-src"
-    if [ -d "$DOCS_DIR/zsh-src/Doc" ]; then
-        mv "$DOCS_DIR/zsh-src/Doc" "$DOCS_DIR/zsh/manual"
-        rm -rf "$DOCS_DIR/zsh-src"
+    local attempt=0
+    local success=false
+
+    while [ $attempt -lt $MAX_RETRIES ] && [ "$success" = false ]; do
+        attempt=$((attempt + 1))
+
+        if [ $attempt -gt 1 ]; then
+            log_warning "[$name] Retry $attempt of $MAX_RETRIES..."
+            sleep "$RETRY_DELAY"
+        fi
+
+        log_info "[$name] Downloading from $url..."
+
+        if curl -sL -o "$full_target" "$url" 2>/dev/null; then
+            if [ -s "$full_target" ]; then
+                success=true
+            else
+                rm -f "$full_target"
+            fi
+        fi
+    done
+
+    if [ "$success" = true ]; then
+        log_success "[$name] Downloaded successfully"
+        echo "$name" >> "$SUCCESS_FILE"
+        return 0
+    else
+        log_error "[$name] Failed after $MAX_RETRIES attempts"
+        echo "$name" >> "$FAILED_FILE"
+        return 1
     fi
-    # Also get some Zsh guides
-    git clone --depth 1 https://github.com/zsh-users/zsh-completions.git "$DOCS_DIR/zsh/completions" || \
-        echo "Warning: Could not clone zsh completions"
-else
-    echo "Zsh docs already exist, skipping..."
-fi
+}
 
-# JavaScript/Node.js Documentation
-echo "Downloading JavaScript/Node.js docs..."
-if [ ! -d "$DOCS_DIR/nodejs" ]; then
-    # Clean up temp directories if they exist from a previous failed run
-    rm -rf "$DOCS_DIR/nodejs-src" "$DOCS_DIR/mdn-js-tmp"
-    git clone --depth 1 https://github.com/nodejs/node.git "$DOCS_DIR/nodejs-src"
-    if [ -d "$DOCS_DIR/nodejs-src/doc" ]; then
-        mv "$DOCS_DIR/nodejs-src/doc" "$DOCS_DIR/nodejs"
-        rm -rf "$DOCS_DIR/nodejs-src"
+# Complex download task (multi-step)
+download_complex() {
+    local name="$1"
+    shift
+    # Remaining args are the script to execute
+
+    log_info "[$name] Starting complex download..."
+
+    if "$@"; then
+        log_success "[$name] Downloaded successfully"
+        echo "$name" >> "$SUCCESS_FILE"
+        return 0
+    else
+        log_error "[$name] Failed"
+        echo "$name" >> "$FAILED_FILE"
+        return 1
     fi
-    # Also get MDN JavaScript docs
-    git clone --depth 1 https://github.com/mdn/content.git "$DOCS_DIR/mdn-js-tmp"
-    if [ -d "$DOCS_DIR/mdn-js-tmp/files/en-us/web/javascript" ]; then
-        mkdir -p "$DOCS_DIR/javascript"
-        mv "$DOCS_DIR/mdn-js-tmp/files/en-us/web/javascript" "$DOCS_DIR/javascript/mdn"
-        rm -rf "$DOCS_DIR/mdn-js-tmp"
-    fi
+}
+
+# Export functions and variables for parallel execution
+export -f download_repo download_curl download_complex log_info log_success log_warning log_error
+export DOCS_DIR PROGRESS_DIR FAILED_FILE SUCCESS_FILE SKIPPED_FILE MAX_RETRIES RETRY_DELAY
+export RED GREEN YELLOW BLUE NC
+
+# Define all download tasks
+# Format: "function|name|arg1|arg2|..."
+DOWNLOAD_TASKS=(
+    # Simple git clones
+    "download_repo|Kubernetes|https://github.com/kubernetes/website.git|kubernetes"
+    "download_repo|Terraform|https://github.com/hashicorp/terraform-docs-common.git|terraform"
+    "download_repo|Docker|https://github.com/docker/docs.git|docker"
+    "download_repo|Ansible|https://github.com/ansible/ansible-documentation.git|ansible"
+    "download_repo|Prometheus|https://github.com/prometheus/docs.git|prometheus"
+    "download_repo|n8n|https://github.com/n8n-io/n8n-docs.git|n8n"
+
+    # Repos with subdir extraction
+    "download_repo|Python|https://github.com/python/cpython.git|python|Doc|python-src"
+    "download_repo|Go|https://github.com/golang/go.git|go|doc|go-src"
+    "download_repo|Grafana|https://github.com/grafana/grafana.git|grafana|docs|grafana-src"
+    "download_repo|Elasticsearch|https://github.com/elastic/elasticsearch.git|elasticsearch|docs|es-src"
+    "download_repo|Logstash|https://github.com/elastic/logstash.git|logstash|docs|logstash-src"
+    "download_repo|Kibana|https://github.com/elastic/kibana.git|kibana|docs|kibana-src"
+    "download_repo|Jenkins|https://github.com/jenkins-infra/jenkins.io.git|jenkins|content|jenkins-src"
+    "download_repo|ArgoCD|https://github.com/argoproj/argo-cd.git|argocd|docs|argocd-src"
+    "download_repo|Helm|https://github.com/helm/helm.git|helm|docs|helm-src"
+    "download_repo|GCP|https://github.com/googleapis/google-cloud-python.git|gcp/python-client|docs|gcp-tmp"
+    "download_repo|Rust-Base|https://github.com/rust-lang/rust.git|rust|src/doc|rust-src"
+    "download_repo|NodeJS|https://github.com/nodejs/node.git|nodejs|doc|nodejs-src"
+    "download_repo|Zsh-Base|https://github.com/zsh-users/zsh.git|zsh/manual|Doc|zsh-src"
+    "download_repo|Git-Official|https://github.com/git/git.git|git/official-docs|Documentation|git-src"
+    "download_repo|K8s-AI-ClusterAPI|https://github.com/kubernetes-sigs/cluster-api.git|kubernetes-ai|docs|k8s-ai-src"
+    "download_repo|GitHub-Actions|https://github.com/github/docs.git|github-actions/docs|content/actions|gh-docs-tmp"
+    "download_repo|JavaScript-MDN|https://github.com/mdn/content.git|javascript/mdn|files/en-us/web/javascript|mdn-js-tmp"
+
+    # Additional resources (direct clones)
+    "download_repo|Rust-ByExample|https://github.com/rust-lang/rust-by-example.git|rust/by-example"
+    "download_repo|Git-ProGit|https://github.com/progit/progit2.git|git/progit2"
+    "download_repo|Bash-Handbook|https://github.com/denysdovhan/bash-handbook.git|bash/handbook"
+    "download_repo|Zsh-Completions|https://github.com/zsh-users/zsh-completions.git|zsh/completions"
+    "download_repo|JSON-Schema|https://github.com/json-schema-org/json-schema-spec.git|config-formats/json-schema"
+    "download_repo|Kubeflow|https://github.com/kubeflow/website.git|kubernetes-ai/kubeflow/docs|content|kubeflow-tmp"
+
+    # Curl downloads
+    "download_curl|Bash-Manual|https://www.gnu.org/software/bash/manual/bash.html|bash/bash.html"
+    "download_curl|YAML-Spec|https://yaml.org/spec/1.2.2/|config-formats/yaml-spec.md"
+)
+
+# Process a single task
+process_task() {
+    local task="$1"
+    IFS='|' read -ra ARGS <<< "$task"
+    local func="${ARGS[0]}"
+
+    case "$func" in
+        download_repo)
+            download_repo "${ARGS[1]}" "${ARGS[2]}" "${ARGS[3]}" "${ARGS[4]:-}" "${ARGS[5]:-}"
+            ;;
+        download_curl)
+            download_curl "${ARGS[1]}" "${ARGS[2]}" "${ARGS[3]}"
+            ;;
+    esac
+}
+
+export -f process_task
+
+# Main execution
+echo ""
+echo "========================================================"
+echo "  DevOps Documentation Downloader (Parallel Edition)"
+echo "========================================================"
+echo ""
+log_info "Target directory: $DOCS_DIR"
+log_info "Parallel jobs: $PARALLEL_JOBS"
+log_info "Max retries: $MAX_RETRIES"
+log_info "Total sources: ${#DOWNLOAD_TASKS[@]}"
+echo ""
+echo "--------------------------------------------------------"
+echo ""
+
+START_TIME=$(date +%s)
+
+# Check if GNU parallel is available, fall back to xargs
+if command -v parallel &> /dev/null; then
+    log_info "Using GNU parallel for concurrent downloads..."
+    printf '%s\n' "${DOWNLOAD_TASKS[@]}" | parallel -j "$PARALLEL_JOBS" --halt never process_task {}
 else
-    echo "JavaScript/Node.js docs already exist, skipping..."
+    log_info "Using xargs for concurrent downloads (install GNU parallel for better progress)..."
+    printf '%s\n' "${DOWNLOAD_TASKS[@]}" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'process_task "$@"' _ {}
 fi
 
-# Rust Documentation
-echo "Downloading Rust docs..."
-if [ ! -d "$DOCS_DIR/rust" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/rust-src"
-    git clone --depth 1 https://github.com/rust-lang/rust.git "$DOCS_DIR/rust-src"
-    if [ -d "$DOCS_DIR/rust-src/src/doc" ]; then
-        mv "$DOCS_DIR/rust-src/src/doc" "$DOCS_DIR/rust"
-        rm -rf "$DOCS_DIR/rust-src"
-    fi
-    # Also get Rust by Example
-    git clone --depth 1 https://github.com/rust-lang/rust-by-example.git "$DOCS_DIR/rust/by-example" || \
-        echo "Warning: Could not clone Rust by Example"
-else
-    echo "Rust docs already exist, skipping..."
-fi
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
 
-# Grafana Documentation
-echo "Downloading Grafana docs..."
-if [ ! -d "$DOCS_DIR/grafana" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/grafana-src"
-    git clone --depth 1 https://github.com/grafana/grafana.git "$DOCS_DIR/grafana-src"
-    if [ -d "$DOCS_DIR/grafana-src/docs" ]; then
-        mv "$DOCS_DIR/grafana-src/docs" "$DOCS_DIR/grafana"
-        rm -rf "$DOCS_DIR/grafana-src"
-    fi
-else
-    echo "Grafana docs already exist, skipping..."
-fi
-
-# ELK Stack Documentation
-echo "Downloading ELK Stack docs..."
-# Elasticsearch
-if [ ! -d "$DOCS_DIR/elasticsearch" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/es-src"
-    git clone --depth 1 https://github.com/elastic/elasticsearch.git "$DOCS_DIR/es-src"
-    if [ -d "$DOCS_DIR/es-src/docs" ]; then
-        mv "$DOCS_DIR/es-src/docs" "$DOCS_DIR/elasticsearch"
-        rm -rf "$DOCS_DIR/es-src"
-    fi
-else
-    echo "Elasticsearch docs already exist, skipping..."
-fi
-
-# Logstash
-if [ ! -d "$DOCS_DIR/logstash" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/logstash-src"
-    git clone --depth 1 https://github.com/elastic/logstash.git "$DOCS_DIR/logstash-src"
-    if [ -d "$DOCS_DIR/logstash-src/docs" ]; then
-        mv "$DOCS_DIR/logstash-src/docs" "$DOCS_DIR/logstash"
-        rm -rf "$DOCS_DIR/logstash-src"
-    fi
-else
-    echo "Logstash docs already exist, skipping..."
-fi
-
-# Kibana
-if [ ! -d "$DOCS_DIR/kibana" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/kibana-src"
-    git clone --depth 1 https://github.com/elastic/kibana.git "$DOCS_DIR/kibana-src"
-    if [ -d "$DOCS_DIR/kibana-src/docs" ]; then
-        mv "$DOCS_DIR/kibana-src/docs" "$DOCS_DIR/kibana"
-        rm -rf "$DOCS_DIR/kibana-src"
-    fi
-else
-    echo "Kibana docs already exist, skipping..."
-fi
-
-# Git Documentation
-echo "Downloading Git docs..."
-if [ ! -d "$DOCS_DIR/git" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/git-src"
-    mkdir -p "$DOCS_DIR/git"
-    # Clone the official Git book
-    git clone --depth 1 https://github.com/progit/progit2.git "$DOCS_DIR/git/progit2" || \
-        echo "Warning: Could not clone Pro Git book"
-    # Get Git reference
-    git clone --depth 1 https://github.com/git/git.git "$DOCS_DIR/git-src"
-    if [ -d "$DOCS_DIR/git-src/Documentation" ]; then
-        mv "$DOCS_DIR/git-src/Documentation" "$DOCS_DIR/git/official-docs"
-        rm -rf "$DOCS_DIR/git-src"
-    fi
-else
-    echo "Git docs already exist, skipping..."
-fi
-
-# Jenkins Documentation
-echo "Downloading Jenkins docs..."
-if [ ! -d "$DOCS_DIR/jenkins" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/jenkins-src"
-    git clone --depth 1 https://github.com/jenkins-infra/jenkins.io.git "$DOCS_DIR/jenkins-src"
-    if [ -d "$DOCS_DIR/jenkins-src/content" ]; then
-        mv "$DOCS_DIR/jenkins-src/content" "$DOCS_DIR/jenkins"
-        rm -rf "$DOCS_DIR/jenkins-src"
-    fi
-else
-    echo "Jenkins docs already exist, skipping..."
-fi
-
-# GitHub Actions Documentation
-echo "Downloading GitHub Actions docs..."
-if [ ! -d "$DOCS_DIR/github-actions" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/gh-docs-tmp"
-    mkdir -p "$DOCS_DIR/github-actions"
-    git clone --depth 1 https://github.com/github/docs.git "$DOCS_DIR/gh-docs-tmp"
-    if [ -d "$DOCS_DIR/gh-docs-tmp/content/actions" ]; then
-        mv "$DOCS_DIR/gh-docs-tmp/content/actions" "$DOCS_DIR/github-actions/docs"
-        rm -rf "$DOCS_DIR/gh-docs-tmp"
-    fi
-else
-    echo "GitHub Actions docs already exist, skipping..."
-fi
-
-# ArgoCD Documentation
-echo "Downloading ArgoCD docs..."
-if [ ! -d "$DOCS_DIR/argocd" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/argocd-src"
-    git clone --depth 1 https://github.com/argoproj/argo-cd.git "$DOCS_DIR/argocd-src"
-    if [ -d "$DOCS_DIR/argocd-src/docs" ]; then
-        mv "$DOCS_DIR/argocd-src/docs" "$DOCS_DIR/argocd"
-        rm -rf "$DOCS_DIR/argocd-src"
-    fi
-else
-    echo "ArgoCD docs already exist, skipping..."
-fi
-
-# Helm Documentation
-echo "Downloading Helm docs..."
-if [ ! -d "$DOCS_DIR/helm" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/helm-src"
-    git clone --depth 1 https://github.com/helm/helm.git "$DOCS_DIR/helm-src"
-    if [ -d "$DOCS_DIR/helm-src/docs" ]; then
-        mv "$DOCS_DIR/helm-src/docs" "$DOCS_DIR/helm"
-        rm -rf "$DOCS_DIR/helm-src"
-    fi
-else
-    echo "Helm docs already exist, skipping..."
-fi
-
-# GCP Documentation
-echo "Downloading GCP docs..."
-if [ ! -d "$DOCS_DIR/gcp" ]; then
-    # Clean up temp directory if it exists from a previous failed run
-    rm -rf "$DOCS_DIR/gcp-tmp"
-    mkdir -p "$DOCS_DIR/gcp"
-    # GCP Python client docs
-    git clone --depth 1 https://github.com/googleapis/google-cloud-python.git "$DOCS_DIR/gcp-tmp"
-    if [ -d "$DOCS_DIR/gcp-tmp/docs" ]; then
-        mv "$DOCS_DIR/gcp-tmp/docs" "$DOCS_DIR/gcp/python-client"
-        rm -rf "$DOCS_DIR/gcp-tmp"
-    fi
-else
-    echo "GCP docs already exist, skipping..."
-fi
-
-# n8n Documentation
-echo "Downloading n8n docs..."
-if [ ! -d "$DOCS_DIR/n8n" ]; then
-    git clone --depth 1 https://github.com/n8n-io/n8n-docs.git "$DOCS_DIR/n8n" || \
-        echo "Warning: Could not clone n8n docs"
-else
-    echo "n8n docs already exist, skipping..."
-fi
-
-# Configuration formats (JSON Schema, YAML guides)
-echo "Downloading JSON/YAML documentation..."
-if [ ! -d "$DOCS_DIR/config-formats" ]; then
-    mkdir -p "$DOCS_DIR/config-formats"
-    # JSON Schema
-    git clone --depth 1 https://github.com/json-schema-org/json-schema-spec.git "$DOCS_DIR/config-formats/json-schema" || \
-        echo "Warning: Could not clone JSON Schema"
-    # YAML spec
-    curl -o "$DOCS_DIR/config-formats/yaml-spec.md" https://yaml.org/spec/1.2.2/ || \
-        echo "Warning: Could not download YAML spec"
-else
-    echo "Config formats docs already exist, skipping..."
-fi
+# Count results
+SUCCESS_COUNT=$(wc -l < "$SUCCESS_FILE" 2>/dev/null || echo 0)
+FAILED_COUNT=$(wc -l < "$FAILED_FILE" 2>/dev/null || echo 0)
+SKIPPED_COUNT=$(wc -l < "$SKIPPED_FILE" 2>/dev/null || echo 0)
 
 echo ""
-echo "═══════════════════════════════════════════"
-echo "Documentation download complete!"
-echo "═══════════════════════════════════════════"
-echo "Total size: $(du -sh $DOCS_DIR | cut -f1)"
+echo "========================================================"
+echo "  Download Summary"
+echo "========================================================"
 echo ""
-echo "Downloaded documentation for:"
+echo -e "${GREEN}Successful:${NC} $SUCCESS_COUNT"
+echo -e "${YELLOW}Skipped:${NC}    $SKIPPED_COUNT (already existed)"
+echo -e "${RED}Failed:${NC}     $FAILED_COUNT"
+echo ""
+echo "Duration: ${DURATION}s"
+echo "Total size: $(du -sh "$DOCS_DIR" 2>/dev/null | cut -f1)"
+echo ""
+
+# Show failed downloads if any
+if [ "$FAILED_COUNT" -gt 0 ]; then
+    echo -e "${RED}Failed downloads:${NC}"
+    cat "$FAILED_FILE" | while read -r name; do
+        echo "  - $name"
+    done
+    echo ""
+fi
+
+echo "Documentation categories:"
 echo ""
 echo "DEVOPS & INFRASTRUCTURE:"
-echo "  ✓ Kubernetes"
-echo "  ✓ Kubernetes AI (Cluster API, Kubeflow)"
-echo "  ✓ Terraform"
-echo "  ✓ Docker"
-echo "  ✓ Ansible"
-echo "  ✓ Helm"
+[ -d "$DOCS_DIR/kubernetes" ] && echo -e "  ${GREEN}[OK]${NC} Kubernetes" || echo -e "  ${RED}[--]${NC} Kubernetes"
+[ -d "$DOCS_DIR/kubernetes-ai" ] && echo -e "  ${GREEN}[OK]${NC} Kubernetes AI (Cluster API, Kubeflow)" || echo -e "  ${RED}[--]${NC} Kubernetes AI"
+[ -d "$DOCS_DIR/terraform" ] && echo -e "  ${GREEN}[OK]${NC} Terraform" || echo -e "  ${RED}[--]${NC} Terraform"
+[ -d "$DOCS_DIR/docker" ] && echo -e "  ${GREEN}[OK]${NC} Docker" || echo -e "  ${RED}[--]${NC} Docker"
+[ -d "$DOCS_DIR/ansible" ] && echo -e "  ${GREEN}[OK]${NC} Ansible" || echo -e "  ${RED}[--]${NC} Ansible"
+[ -d "$DOCS_DIR/helm" ] && echo -e "  ${GREEN}[OK]${NC} Helm" || echo -e "  ${RED}[--]${NC} Helm"
 echo ""
 echo "MONITORING & LOGGING:"
-echo "  ✓ Prometheus"
-echo "  ✓ Grafana"
-echo "  ✓ Elasticsearch"
-echo "  ✓ Logstash"
-echo "  ✓ Kibana (ELK Stack)"
+[ -d "$DOCS_DIR/prometheus" ] && echo -e "  ${GREEN}[OK]${NC} Prometheus" || echo -e "  ${RED}[--]${NC} Prometheus"
+[ -d "$DOCS_DIR/grafana" ] && echo -e "  ${GREEN}[OK]${NC} Grafana" || echo -e "  ${RED}[--]${NC} Grafana"
+[ -d "$DOCS_DIR/elasticsearch" ] && echo -e "  ${GREEN}[OK]${NC} Elasticsearch" || echo -e "  ${RED}[--]${NC} Elasticsearch"
+[ -d "$DOCS_DIR/logstash" ] && echo -e "  ${GREEN}[OK]${NC} Logstash" || echo -e "  ${RED}[--]${NC} Logstash"
+[ -d "$DOCS_DIR/kibana" ] && echo -e "  ${GREEN}[OK]${NC} Kibana" || echo -e "  ${RED}[--]${NC} Kibana"
 echo ""
 echo "PROGRAMMING LANGUAGES:"
-echo "  ✓ Python"
-echo "  ✓ Go"
-echo "  ✓ Rust"
-echo "  ✓ JavaScript/Node.js"
-echo "  ✓ Bash"
-echo "  ✓ Zsh"
+[ -d "$DOCS_DIR/python" ] && echo -e "  ${GREEN}[OK]${NC} Python" || echo -e "  ${RED}[--]${NC} Python"
+[ -d "$DOCS_DIR/go" ] && echo -e "  ${GREEN}[OK]${NC} Go" || echo -e "  ${RED}[--]${NC} Go"
+[ -d "$DOCS_DIR/rust" ] && echo -e "  ${GREEN}[OK]${NC} Rust" || echo -e "  ${RED}[--]${NC} Rust"
+[ -d "$DOCS_DIR/nodejs" ] || [ -d "$DOCS_DIR/javascript" ] && echo -e "  ${GREEN}[OK]${NC} JavaScript/Node.js" || echo -e "  ${RED}[--]${NC} JavaScript/Node.js"
+[ -d "$DOCS_DIR/bash" ] && echo -e "  ${GREEN}[OK]${NC} Bash" || echo -e "  ${RED}[--]${NC} Bash"
+[ -d "$DOCS_DIR/zsh" ] && echo -e "  ${GREEN}[OK]${NC} Zsh" || echo -e "  ${RED}[--]${NC} Zsh"
 echo ""
 echo "CI/CD & GITOPS:"
-echo "  ✓ Git"
-echo "  ✓ Jenkins"
-echo "  ✓ GitHub Actions"
-echo "  ✓ ArgoCD"
-echo "  ✓ GitLab CI/CD"
+[ -d "$DOCS_DIR/git" ] && echo -e "  ${GREEN}[OK]${NC} Git" || echo -e "  ${RED}[--]${NC} Git"
+[ -d "$DOCS_DIR/jenkins" ] && echo -e "  ${GREEN}[OK]${NC} Jenkins" || echo -e "  ${RED}[--]${NC} Jenkins"
+[ -d "$DOCS_DIR/github-actions" ] && echo -e "  ${GREEN}[OK]${NC} GitHub Actions" || echo -e "  ${RED}[--]${NC} GitHub Actions"
+[ -d "$DOCS_DIR/argocd" ] && echo -e "  ${GREEN}[OK]${NC} ArgoCD" || echo -e "  ${RED}[--]${NC} ArgoCD"
 echo ""
 echo "CLOUD PLATFORMS:"
-echo "  ✓ AWS"
-echo "  ✓ Azure"
-echo "  ✓ GCP"
+[ -d "$DOCS_DIR/gcp" ] && echo -e "  ${GREEN}[OK]${NC} GCP" || echo -e "  ${RED}[--]${NC} GCP"
 echo ""
 echo "AUTOMATION & INTEGRATION:"
-echo "  ✓ n8n"
+[ -d "$DOCS_DIR/n8n" ] && echo -e "  ${GREEN}[OK]${NC} n8n" || echo -e "  ${RED}[--]${NC} n8n"
 echo ""
 echo "CONFIGURATION:"
-echo "  ✓ JSON Schema"
-echo "  ✓ YAML"
+[ -d "$DOCS_DIR/config-formats" ] && echo -e "  ${GREEN}[OK]${NC} JSON Schema / YAML" || echo -e "  ${RED}[--]${NC} JSON Schema / YAML"
 echo ""
+echo "========================================================"
+
+# Exit with error if any downloads failed
+if [ "$FAILED_COUNT" -gt 0 ]; then
+    exit 1
+fi

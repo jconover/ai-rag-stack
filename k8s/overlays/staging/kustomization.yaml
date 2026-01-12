@@ -1,0 +1,71 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: ai-rag-stack-staging
+
+namespace: ai-rag-stack-staging
+
+# Reference base configuration
+resources:
+  - ../../
+
+# Common labels for staging environment
+commonLabels:
+  environment: staging
+
+# Patches for staging environment
+patches:
+  # Moderate replicas for staging
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: backend
+
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: frontend
+
+  # Moderate HPA for staging
+  - patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+    target:
+      kind: HorizontalPodAutoscaler
+      name: backend
+
+  # Update ingress host for staging
+  - patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.ai-rag.example.com
+    target:
+      kind: Ingress
+      name: ai-rag-stack
+
+# Override images for staging
+images:
+  - name: jconover/ai-rag-backend
+    newTag: staging
+  - name: jconover/ai-rag-frontend
+    newTag: staging
+
+# ConfigMap patches for staging
+configMapGenerator:
+  - name: backend-config-staging
+    behavior: merge
+    literals:
+      - LOG_LEVEL=info
+      - ENABLE_PROMETHEUS_METRICS=true

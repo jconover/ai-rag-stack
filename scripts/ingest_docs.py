@@ -10,6 +10,7 @@ Features:
 - Metadata enrichment with heading paths
 - Incremental ingestion with change detection (only re-process changed files)
 - Idempotent ingestion using content-based deterministic UUIDs (no duplicates on re-run)
+- Chunk deduplication (exact and fuzzy) to remove duplicate content before embedding
 
 Usage:
     python ingest_docs.py              # Incremental ingestion (default)
@@ -17,6 +18,13 @@ Usage:
     python ingest_docs.py --dry-run    # Show what would be processed
     python ingest_docs.py --stats      # Show registry statistics
     python ingest_docs.py --check-duplicates  # Check for duplicate vectors
+    python ingest_docs.py --no-dedup   # Disable chunk deduplication
+    python ingest_docs.py --fuzzy-dedup --fuzzy-threshold 0.9  # Enable fuzzy dedup
+
+Environment Variables (Deduplication):
+    DEDUPLICATION_ENABLED=true         # Enable/disable chunk deduplication (default: true)
+    FUZZY_DEDUPLICATION_ENABLED=false  # Enable fuzzy near-duplicate detection (default: false)
+    FUZZY_DEDUPLICATION_THRESHOLD=0.95 # Similarity threshold for fuzzy matching (default: 0.95)
 """
 
 import argparse
@@ -74,6 +82,13 @@ from ingestion_registry import (
     print_stats,
 )
 
+# Import chunk deduplication
+from chunk_deduplication import (
+    deduplicate_chunks,
+    DeduplicationStats,
+    log_deduplication_stats,
+)
+
 # Configuration
 DOCS_DIR = os.getenv("DOCS_DIR", "../data/docs")
 CUSTOM_DOCS_DIR = os.getenv("CUSTOM_DOCS_DIR", "../data/custom")
@@ -95,6 +110,11 @@ CHUNKING_MODE = os.getenv("CHUNKING_MODE", "semantic")
 # Hybrid search configuration
 HYBRID_SEARCH_ENABLED = os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
 SPARSE_ENCODER_MODEL = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
+
+# Deduplication configuration
+DEDUPLICATION_ENABLED = os.getenv("DEDUPLICATION_ENABLED", "true").lower() == "true"
+FUZZY_DEDUPLICATION_ENABLED = os.getenv("FUZZY_DEDUPLICATION_ENABLED", "false").lower() == "true"
+FUZZY_DEDUPLICATION_THRESHOLD = float(os.getenv("FUZZY_DEDUPLICATION_THRESHOLD", "0.95"))
 
 # Vector constants
 DENSE_VECTOR_NAME = "dense"
@@ -130,7 +150,14 @@ def generate_chunk_id(source_path: str, chunk_index: int, content: str) -> str:
 
 
 class DocumentIngestionPipeline:
-    def __init__(self, use_semantic_chunking: bool = True, use_hybrid: bool = None):
+    def __init__(
+        self,
+        use_semantic_chunking: bool = True,
+        use_hybrid: bool = None,
+        enable_deduplication: bool = None,
+        enable_fuzzy_deduplication: bool = None,
+        fuzzy_threshold: float = None,
+    ):
         """
         Initialize the ingestion pipeline.
 
@@ -139,7 +166,26 @@ class DocumentIngestionPipeline:
                                    If False, use legacy RecursiveCharacterTextSplitter.
             use_hybrid: If True, generate both dense and sparse vectors.
                        If None, read from HYBRID_SEARCH_ENABLED env var.
+            enable_deduplication: If True, remove duplicate chunks before embedding.
+                                 If None, read from DEDUPLICATION_ENABLED env var.
+            enable_fuzzy_deduplication: If True, also remove near-duplicates.
+                                       If None, read from FUZZY_DEDUPLICATION_ENABLED env var.
+            fuzzy_threshold: Similarity threshold for fuzzy deduplication (0.0-1.0).
+                            If None, read from FUZZY_DEDUPLICATION_THRESHOLD env var.
         """
+        # Deduplication settings
+        self.enable_deduplication = (
+            enable_deduplication if enable_deduplication is not None
+            else DEDUPLICATION_ENABLED
+        )
+        self.enable_fuzzy_deduplication = (
+            enable_fuzzy_deduplication if enable_fuzzy_deduplication is not None
+            else FUZZY_DEDUPLICATION_ENABLED
+        )
+        self.fuzzy_threshold = (
+            fuzzy_threshold if fuzzy_threshold is not None
+            else FUZZY_DEDUPLICATION_THRESHOLD
+        )
         self.embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
             model_kwargs={'device': EMBEDDING_DEVICE}
@@ -455,18 +501,18 @@ class DocumentIngestionPipeline:
         print(f"Loaded {len(documents)} markdown files from {source_name}")
         return documents
 
-    def split_documents(self, documents: List[Document]) -> List[Document]:
+    def split_documents(self, documents: List[Document]) -> Tuple[List[Document], Optional[DeduplicationStats]]:
         """
-        Split documents into chunks using configured method.
+        Split documents into chunks using configured method, then deduplicate.
 
         Args:
             documents: List of Document objects to split
 
         Returns:
-            List of chunked Document objects
+            Tuple of (chunked Document objects, deduplication stats or None)
         """
         if not documents:
-            return []
+            return [], None
 
         print(f"Splitting {len(documents)} documents into chunks...")
 
@@ -486,7 +532,20 @@ class DocumentIngestionPipeline:
             chunks = self.text_splitter.split_documents(documents)
             print(f"Created {len(chunks)} chunks")
 
-        return chunks
+        # Deduplicate chunks if enabled
+        dedup_stats = None
+        if self.enable_deduplication and chunks:
+            print(f"\nDeduplicating {len(chunks)} chunks...")
+            chunks, dedup_stats = deduplicate_chunks(
+                chunks,
+                enable_fuzzy=self.enable_fuzzy_deduplication,
+                fuzzy_threshold=self.fuzzy_threshold,
+                preserve_first=True,
+                track_sources=True,
+            )
+            log_deduplication_stats(dedup_stats, verbose=True)
+
+        return chunks, dedup_stats
 
     def _ensure_hybrid_collection(self, collection_name: str):
         """Create or verify collection supports hybrid search (dense + sparse vectors)."""
@@ -598,13 +657,14 @@ class DocumentIngestionPipeline:
 
         Uses content-based deterministic UUIDs to prevent duplicates on re-run.
         Same content always maps to same ID, enabling safe re-ingestion.
+        Includes automatic chunk deduplication before embedding.
         """
         if not documents:
             print("No documents to ingest")
             return
 
-        # Split documents
-        chunks = self.split_documents(documents)
+        # Split and deduplicate documents
+        chunks, dedup_stats = self.split_documents(documents)
 
         if not chunks:
             print("No chunks created from documents")
@@ -817,11 +877,15 @@ class DocumentIngestionPipeline:
         # Process new/changed documents
         if all_documents_to_process:
             print(f"\nProcessing {len(all_documents_to_process)} documents...")
-            chunks = self.split_documents(all_documents_to_process)
+            chunks, dedup_stats = self.split_documents(all_documents_to_process)
 
             if chunks:
-                print(f"Created {len(chunks)} chunks")
+                print(f"Final chunk count after processing: {len(chunks)}")
                 total_stats['chunks_created'] = len(chunks)
+
+                # Track deduplication stats
+                if dedup_stats:
+                    total_stats['duplicates_removed'] = dedup_stats.total_removed
 
                 # Ingest chunks
                 self._ingest_chunks_with_registry(chunks)
@@ -834,6 +898,8 @@ class DocumentIngestionPipeline:
         print(f"{'='*60}")
         print(f"Chunks created: {total_stats['chunks_created']}")
         print(f"Chunks deleted: {total_stats['chunks_deleted']}")
+        if 'duplicates_removed' in total_stats:
+            print(f"Duplicates removed: {total_stats['duplicates_removed']}")
         print_stats(self.registry)
 
     def _ensure_dense_collection(self, collection_name: str):
@@ -978,6 +1044,7 @@ def ingest_single_file(
     source_name: str = "custom",
     collection_name: str = COLLECTION_NAME,
     use_semantic_chunking: bool = True,
+    enable_deduplication: bool = True,
 ) -> int:
     """
     Ingest a single file into the vector database using idempotent UUIDs.
@@ -985,15 +1052,17 @@ def ingest_single_file(
     Uses content-based deterministic UUIDs to ensure:
     - Re-running ingestion updates existing vectors instead of creating duplicates
     - Same content always maps to same ID (idempotent)
+    - Automatic chunk deduplication before embedding
 
     Args:
         file_path: Path to the file to ingest
         source_name: Source type label for metadata
         collection_name: Qdrant collection name
         use_semantic_chunking: Whether to use semantic chunking
+        enable_deduplication: Whether to deduplicate chunks
 
     Returns:
-        Number of chunks created
+        Number of chunks created (after deduplication)
     """
     file_path = Path(file_path)
 
@@ -1013,8 +1082,11 @@ def ingest_single_file(
         }
     )
 
-    pipeline = DocumentIngestionPipeline(use_semantic_chunking=use_semantic_chunking)
-    chunks = pipeline.split_documents([doc])
+    pipeline = DocumentIngestionPipeline(
+        use_semantic_chunking=use_semantic_chunking,
+        enable_deduplication=enable_deduplication,
+    )
+    chunks, dedup_stats = pipeline.split_documents([doc])
 
     if chunks:
         # Use idempotent ingestion with deterministic UUIDs
@@ -1022,7 +1094,11 @@ def ingest_single_file(
             pipeline._ingest_hybrid(chunks, collection_name)
         else:
             pipeline._ingest_dense_only(chunks, collection_name)
-        print(f"Ingested {len(chunks)} chunks from {file_path.name} (idempotent)")
+
+        dedup_msg = ""
+        if dedup_stats and dedup_stats.total_removed > 0:
+            dedup_msg = f", {dedup_stats.total_removed} duplicates removed"
+        print(f"Ingested {len(chunks)} chunks from {file_path.name} (idempotent{dedup_msg})")
 
     return len(chunks)
 
@@ -1040,10 +1116,17 @@ Examples:
   python ingest_docs.py --stats      # Show registry statistics only
   python ingest_docs.py --source kubernetes  # Process only kubernetes docs
   python ingest_docs.py --check-duplicates   # Check for duplicate vectors
+  python ingest_docs.py --no-dedup           # Disable chunk deduplication
+  python ingest_docs.py --fuzzy-dedup        # Enable fuzzy near-duplicate removal
+  python ingest_docs.py --fuzzy-dedup --fuzzy-threshold 0.9  # Custom threshold
 
 Note: This script uses idempotent content-based UUIDs. Re-running ingestion
 will update existing vectors instead of creating duplicates. Safe to run
 'make ingest' multiple times.
+
+Deduplication removes duplicate chunks BEFORE embedding, saving compute costs
+and improving search quality. Exact deduplication is enabled by default.
+Fuzzy deduplication can catch near-duplicates with minor differences.
         """
     )
 
@@ -1087,6 +1170,25 @@ will update existing vectors instead of creating duplicates. Safe to run
         '--check-duplicates',
         action='store_true',
         help='Check for duplicate content in the vector store and report findings'
+    )
+
+    parser.add_argument(
+        '--no-dedup',
+        action='store_true',
+        help='Disable chunk deduplication during ingestion'
+    )
+
+    parser.add_argument(
+        '--fuzzy-dedup',
+        action='store_true',
+        help='Enable fuzzy (near-duplicate) deduplication in addition to exact matching'
+    )
+
+    parser.add_argument(
+        '--fuzzy-threshold',
+        type=float,
+        default=0.95,
+        help='Similarity threshold for fuzzy deduplication (0.0-1.0, default: 0.95)'
     )
 
     return parser.parse_args()
@@ -1165,6 +1267,11 @@ def main():
     # Determine chunking mode
     use_semantic = CHUNKING_MODE.lower() == "semantic" and not args.legacy_chunking
 
+    # Determine deduplication settings from args
+    enable_dedup = not args.no_dedup
+    enable_fuzzy = args.fuzzy_dedup
+    fuzzy_threshold = args.fuzzy_threshold
+
     print("Starting DevOps Documentation Ingestion Pipeline...")
     print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
     print(f"Collection: {COLLECTION_NAME}")
@@ -1174,12 +1281,26 @@ def main():
     print(f"Incremental mode: {'disabled (--full)' if args.full else 'enabled'}")
     print(f"Idempotent UUIDs: enabled (content-based deterministic IDs)")
 
+    # Deduplication status
+    if enable_dedup:
+        dedup_mode = "exact"
+        if enable_fuzzy:
+            dedup_mode = f"exact + fuzzy (threshold={fuzzy_threshold})"
+        print(f"Deduplication: enabled ({dedup_mode})")
+    else:
+        print(f"Deduplication: disabled")
+
     if not use_semantic:
         print(f"Chunk size: {CHUNK_SIZE}, Overlap: {CHUNK_OVERLAP}")
 
     print()  # Blank line for readability
 
-    pipeline = DocumentIngestionPipeline(use_semantic_chunking=use_semantic)
+    pipeline = DocumentIngestionPipeline(
+        use_semantic_chunking=use_semantic,
+        enable_deduplication=enable_dedup,
+        enable_fuzzy_deduplication=enable_fuzzy,
+        fuzzy_threshold=fuzzy_threshold,
+    )
     pipeline.run(
         use_raw_loading=use_semantic,
         force_full=args.full,

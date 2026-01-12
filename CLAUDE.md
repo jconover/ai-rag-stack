@@ -56,12 +56,13 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
 
 ### RAG Pipeline Flow
 1. User query → Backend `/api/chat` or `/api/chat/stream`
-2. **HyDE expansion** (optional): Generate hypothetical document for vague queries
-3. **Hybrid search**: BM25 keyword + vector semantic search with RRF fusion
-4. **Reranking**: Cross-encoder reranks top 20 → top 5
-5. **Web search fallback**: If scores low, Tavily searches trusted doc sites
-6. Context + query → Ollama LLM → Response with source attribution
-7. Conversation saved to Redis (24h TTL)
+2. **Conversation context** (optional): Resolve pronouns ("it", "that") using prior messages
+3. **HyDE expansion** (optional): Generate hypothetical document for vague queries
+4. **Hybrid search**: BM25 keyword + vector semantic search with RRF fusion
+5. **Reranking**: Cross-encoder reranks top 20 → top 5
+6. **Web search fallback**: If scores low, Tavily searches trusted doc sites
+7. Context + query → Ollama LLM → Response with source attribution
+8. Conversation saved to Redis (24h TTL)
 
 ### Key Files
 
@@ -72,6 +73,7 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
 | `backend/app/vectorstore.py` | Qdrant interface, hybrid search (`VectorStore` class) |
 | `backend/app/reranker.py` | Cross-encoder reranking |
 | `backend/app/query_expansion.py` | HyDE query expansion |
+| `backend/app/conversation_context.py` | Conversation-aware query expansion for follow-ups |
 | `backend/app/web_search.py` | Tavily web search fallback |
 | `backend/app/config.py` | Environment configuration (reads `.env`) |
 | `scripts/ingest_docs.py` | Document ingestion pipeline |
@@ -107,6 +109,9 @@ Markdown/Text → LangChain DirectoryLoader → RecursiveCharacterTextSplitter
 - `HYBRID_SEARCH_ENABLED=true` - Enable BM25 + vector hybrid search
 - `RERANKER_ENABLED=true` - Enable cross-encoder reranking
 - `HYDE_ENABLED=true` - Enable HyDE query expansion
+- `CONVERSATION_CONTEXT_ENABLED=true` - Enable conversation-aware retrieval (default: true)
+- `CONVERSATION_CONTEXT_HISTORY_LIMIT=3` - Number of prior messages to consider
+- `CONVERSATION_CONTEXT_MAX_TERMS=10` - Max context terms to extract from history
 - `WEB_SEARCH_ENABLED=true` - Enable Tavily web search fallback
 - `TAVILY_API_KEY=tvly-xxx` - Tavily API key (free: 1,000/month)
 - `WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4` - Trigger web search below this score

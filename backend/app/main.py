@@ -41,10 +41,18 @@ from app.models import (
     TokenResponse, APIKeyCreate, APIKeyResponse,
     # Kubernetes readiness probe models
     ReadinessCheck, ReadinessResponse, LivenessResponse,
+    # Prompt template models
+    RenderTemplateRequest, RenderTemplateResponse,
+    # Real-time analytics models
+    RealtimeAnalyticsResponse, LatencyMetrics, RequestMetrics,
+    CacheMetrics, RetrievalQualityMetrics, ModelUsageStats, TopQueryEntry,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
-from app.templates import get_templates, get_template_by_id, get_categories
+from app.templates import (
+    get_templates, get_template_by_id, get_categories,
+    render_template, validate_template_variables
+)
 from app.metrics import get_metrics_summary, ENABLE_PROMETHEUS
 from app.feedback import feedback_log, get_feedback_summary
 from app.database import (
@@ -67,6 +75,7 @@ from app.circuit_breaker import (
     get_circuit_breakers_healthy,
     reset_all_circuit_breakers,
 )
+from app.analytics import get_metrics_collector, MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +151,51 @@ def get_request_id(request: Request) -> Optional[str]:
     return getattr(request.state, "request_id", None)
 
 
+class AnalyticsMiddleware(BaseHTTPMiddleware):
+    """Middleware for collecting real-time analytics metrics.
+
+    Tracks request rate, latency, errors, and other operational metrics
+    for the /api/analytics/realtime endpoint.
+
+    Only active when ANALYTICS_ENABLED=true (default).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if not settings.analytics_enabled:
+            return await call_next(request)
+
+        start_time = time.time()
+
+        # Process request
+        response = await call_next(request)
+
+        # Calculate latency
+        latency_ms = (time.time() - start_time) * 1000
+
+        # Only track API endpoints (skip static files, health checks for rate calculation)
+        path = request.url.path
+        if path.startswith("/api/") and not path.startswith("/api/analytics"):
+            # Get model from request state if available (set by chat endpoints)
+            model = getattr(request.state, "analytics_model", "unknown")
+            cache_hit = getattr(request.state, "analytics_cache_hit", None)
+            avg_score = getattr(request.state, "analytics_avg_score", None)
+            query = getattr(request.state, "analytics_query", None)
+
+            # Record metrics
+            collector = get_metrics_collector()
+            collector.record_request(
+                latency_ms=latency_ms,
+                model=model,
+                status_code=response.status_code,
+                endpoint=path,
+                cache_hit=cache_hit,
+                avg_similarity_score=avg_score,
+                query=query,
+            )
+
+        return response
+
+
 # Rate limiter - uses client IP for identification
 # Limits: 30 requests/minute for chat endpoints (expensive LLM calls)
 limiter = Limiter(key_func=get_remote_address)
@@ -155,6 +209,16 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing DevOps AI Assistant API...")
 
+    # Initialize OpenTelemetry tracing (if enabled)
+    try:
+        from app.tracing import init_tracing, shutdown_tracing
+        if init_tracing(app):
+            logger.info("OpenTelemetry tracing initialized successfully")
+    except ImportError:
+        logger.debug("OpenTelemetry not installed, tracing disabled")
+    except Exception as e:
+        logger.warning(f"Failed to initialize tracing: {e}")
+
     # Initialize PostgreSQL database tables
     try:
         await init_db()
@@ -167,6 +231,13 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down DevOps AI Assistant API...")
+
+    # Shutdown OpenTelemetry tracing
+    try:
+        from app.tracing import shutdown_tracing
+        shutdown_tracing()
+    except Exception as e:
+        logger.warning(f"Error shutting down tracing: {e}")
     try:
         await close_db()
         logger.info("PostgreSQL connections closed")
@@ -199,6 +270,11 @@ app.add_middleware(
 # Added after CORS so it executes before CORS in the middleware chain
 # This ensures X-Request-ID is available throughout the request lifecycle
 app.add_middleware(RequestIDMiddleware)
+
+# Analytics middleware for real-time operational metrics
+# Added after RequestIDMiddleware to track all API requests
+if settings.analytics_enabled:
+    app.add_middleware(AnalyticsMiddleware)
 
 # Rate limiting - protects expensive LLM endpoints from abuse
 app.state.limiter = limiter
@@ -834,6 +910,10 @@ async def chat(
     # Track user_id for authenticated requests
     user_id = str(current_user.id) if current_user else None
 
+    # Get conversation history BEFORE saving the current message
+    # This is used for context-aware retrieval to resolve pronouns/references
+    conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
+
     # Save user message
     save_message(session_id, "user", request.message)
 
@@ -862,13 +942,14 @@ async def chat(
         # Continue without experiment - graceful degradation
 
     try:
-        # Generate response
+        # Generate response with conversation history for context-aware retrieval
         result = await rag_pipeline.generate_response(
             query=request.message,
             model=request.model,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             use_rag=request.use_rag,
+            conversation_history=conversation_history,
         )
 
         # Calculate total latency
@@ -876,6 +957,15 @@ async def chat(
 
         # Save assistant response
         save_message(session_id, "assistant", result['response'])
+
+        # Store analytics data on request state for middleware to capture
+        if settings.analytics_enabled:
+            req.state.analytics_model = result['model']
+            req.state.analytics_query = request.message
+            retrieval_metrics = result.get('retrieval_metrics', {})
+            if retrieval_metrics:
+                req.state.analytics_cache_hit = retrieval_metrics.get('embedding_cache_hit')
+                req.state.analytics_avg_score = retrieval_metrics.get('avg_similarity_score')
 
         # Log query to PostgreSQL (fire-and-forget, non-blocking)
         # Uses create_task to avoid blocking response on DB write
@@ -928,11 +1018,23 @@ async def chat_stream(request: ChatRequest, req: Request):
     # Generate or use provided session ID
     session_id = request.session_id or str(uuid.uuid4())
 
+    # Get conversation history BEFORE saving the current message
+    # This is used for context-aware retrieval to resolve pronouns/references
+    conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
+
     # Save user message
     save_message(session_id, "user", request.message)
 
+    # Track start time for analytics
+    stream_start_time = time.time()
+
     async def generate():
         full_response = ""
+        model_used = request.model or settings.ollama_default_model
+        cache_hit = None
+        avg_score = None
+        is_error = False
+
         try:
             async for chunk in rag_pipeline.generate_response_stream(
                 query=request.message,
@@ -940,14 +1042,20 @@ async def chat_stream(request: ChatRequest, req: Request):
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 use_rag=request.use_rag,
+                conversation_history=conversation_history,
             ):
                 # Accumulate response content
                 if chunk.get('type') == 'content':
                     full_response += chunk.get('content', '')
 
-                # Add session_id to metadata
+                # Add session_id to metadata and capture analytics data
                 if chunk.get('type') == 'metadata':
                     chunk['session_id'] = session_id
+                    model_used = chunk.get('model', model_used)
+                    retrieval_metrics = chunk.get('retrieval_metrics', {})
+                    if retrieval_metrics:
+                        cache_hit = retrieval_metrics.get('embedding_cache_hit')
+                        avg_score = retrieval_metrics.get('avg_similarity_score')
 
                 # Stream as Server-Sent Events format
                 yield f"data: {json.dumps(chunk)}\n\n"
@@ -957,11 +1065,27 @@ async def chat_stream(request: ChatRequest, req: Request):
                 save_message(session_id, "assistant", full_response)
 
         except Exception as e:
+            is_error = True
             error_chunk = {
                 'type': 'error',
                 'error': str(e)
             }
             yield f"data: {json.dumps(error_chunk)}\n\n"
+
+        finally:
+            # Record analytics for streaming endpoint
+            if settings.analytics_enabled:
+                latency_ms = (time.time() - stream_start_time) * 1000
+                collector = get_metrics_collector()
+                collector.record_request(
+                    latency_ms=latency_ms,
+                    model=model_used,
+                    status_code=500 if is_error else 200,
+                    endpoint="/api/chat/stream",
+                    cache_hit=cache_hit,
+                    avg_similarity_score=avg_score,
+                    query=request.message,
+                )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1078,6 +1202,48 @@ async def get_template(template_id: str):
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
+
+
+@app.post("/api/templates/render", response_model=RenderTemplateResponse)
+async def render_template_endpoint(request: RenderTemplateRequest):
+    """Render a template with variable substitutions.
+
+    Takes a template ID and a dictionary of variable values, validates the
+    variables against the template requirements, and returns the rendered
+    prompt with all variables substituted.
+
+    Variables that are not provided will use their default values if available,
+    or be rendered as <variable_name> placeholders.
+
+    Required variables that are not provided will be listed in missing_required.
+    """
+    template = get_template_by_id(request.template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # Validate provided variables
+    is_valid, missing_required, unknown_vars = validate_template_variables(
+        template, request.variables
+    )
+
+    # Warn about unknown variables (but don't fail)
+    if unknown_vars:
+        logging.warning(
+            f"Unknown variables provided for template {request.template_id}: {unknown_vars}"
+        )
+
+    # Render the template
+    rendered_prompt, variables_used, missing_required = render_template(
+        template, request.variables, strict=False
+    )
+
+    return RenderTemplateResponse(
+        template_id=request.template_id,
+        original_prompt=template.get('prompt', ''),
+        rendered_prompt=rendered_prompt,
+        variables_used=variables_used,
+        missing_required=missing_required
+    )
 
 
 @app.post("/api/upload")
@@ -1259,6 +1425,69 @@ async def get_feedback_stats(last_n: int = 100):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/analytics/realtime", response_model=RealtimeAnalyticsResponse)
+async def get_realtime_analytics(
+    request: Request,
+    x_analytics_key: Optional[str] = Header(None, description="API key for protected analytics"),
+):
+    """Get real-time analytics snapshot for operational visibility.
+
+    Returns metrics collected over a sliding window (default 5 minutes) including:
+    - Request rate (requests/minute)
+    - Average response latency with percentiles
+    - Error rate percentage
+    - Embedding cache hit rate
+    - Top queries (anonymized via hash)
+    - Model usage distribution
+    - Retrieval quality metrics (similarity scores)
+
+    Optionally protected via ANALYTICS_ENDPOINT_PROTECTED and ANALYTICS_API_KEY env vars.
+
+    Returns:
+        RealtimeAnalyticsResponse with comprehensive operational metrics
+    """
+    # Check if endpoint is protected
+    if settings.analytics_endpoint_protected:
+        expected_key = settings.analytics_api_key
+        if not expected_key:
+            raise HTTPException(
+                status_code=500,
+                detail="Analytics endpoint is protected but ANALYTICS_API_KEY is not set"
+            )
+        if x_analytics_key != expected_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing X-Analytics-Key header"
+            )
+
+    if not settings.analytics_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Analytics collection is disabled. Set ANALYTICS_ENABLED=true to enable."
+        )
+
+    collector = get_metrics_collector()
+    analytics_data = collector.get_realtime_analytics()
+
+    # Convert raw dict to properly typed response
+    return RealtimeAnalyticsResponse(
+        timestamp=analytics_data["timestamp"],
+        window_seconds=analytics_data["window_seconds"],
+        request_metrics=RequestMetrics(**analytics_data["request_metrics"]),
+        latency_metrics=LatencyMetrics(**analytics_data["latency_metrics"]),
+        cache_metrics=CacheMetrics(**analytics_data["cache_metrics"]),
+        retrieval_quality=RetrievalQualityMetrics(**analytics_data["retrieval_quality"]),
+        model_usage={
+            model: ModelUsageStats(**stats)
+            for model, stats in analytics_data["model_usage"].items()
+        },
+        top_queries=[
+            TopQueryEntry(**entry)
+            for entry in analytics_data["top_queries"]
+        ],
+    )
 
 
 @app.get("/api/analytics/queries", response_model=QueryLogsResponse)

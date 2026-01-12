@@ -1,0 +1,11 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-rag-stack
+  labels:
+    app.kubernetes.io/name: ai-rag-stack
+    app.kubernetes.io/part-of: ai-rag-stack
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "DevOps AI Assistant - RAG system using local LLMs"

@@ -92,6 +92,23 @@ prometheus-client>=0.19.0
 python-json-logger>=2.0.0
 
 # -----------------------------------------------------------------------------
+# OpenTelemetry Distributed Tracing
+# -----------------------------------------------------------------------------
+# Core OpenTelemetry API and SDK
+opentelemetry-api>=1.22.0
+opentelemetry-sdk>=1.22.0
+# OTLP exporter for sending traces to collectors (Jaeger, etc.)
+opentelemetry-exporter-otlp>=1.22.0
+# Console exporter for development/debugging
+opentelemetry-exporter-otlp-proto-grpc>=1.22.0
+# FastAPI instrumentation for automatic HTTP span creation
+opentelemetry-instrumentation-fastapi>=0.43b0
+# httpx instrumentation for outgoing HTTP calls (Tavily, Ollama)
+opentelemetry-instrumentation-httpx>=0.43b0
+# Redis instrumentation for cache operations
+opentelemetry-instrumentation-redis>=0.43b0
+
+# -----------------------------------------------------------------------------
 # Rate Limiting
 # -----------------------------------------------------------------------------
 slowapi>=0.1.9

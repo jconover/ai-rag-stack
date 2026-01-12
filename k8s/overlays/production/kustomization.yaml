@@ -1,0 +1,121 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: ai-rag-stack-production
+
+namespace: ai-rag-stack
+
+# Reference base configuration
+resources:
+  - ../../
+
+# Common labels for production environment
+commonLabels:
+  environment: production
+
+# Common annotations
+commonAnnotations:
+  owner: platform-team
+  criticality: high
+
+# Patches for production environment
+patches:
+  # Production replicas
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+    target:
+      kind: Deployment
+      name: backend
+
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+    target:
+      kind: Deployment
+      name: frontend
+
+  # Production HPA settings
+  - patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 10
+    target:
+      kind: HorizontalPodAutoscaler
+      name: backend
+
+  # Production PDB - ensure high availability
+  - patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 2
+    target:
+      kind: PodDisruptionBudget
+      name: backend
+
+  # Enable TLS in ingress
+  - patch: |-
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: letsencrypt-prod
+      - op: add
+        path: /metadata/annotations/nginx.ingress.kubernetes.io~1ssl-redirect
+        value: "true"
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts:
+              - ai-rag.example.com
+            secretName: ai-rag-tls
+    target:
+      kind: Ingress
+      name: ai-rag-stack
+
+  # Higher resource limits for production backend
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "4"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "8Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "2Gi"
+    target:
+      kind: Deployment
+      name: backend
+
+# Override images for production (use specific version tags)
+images:
+  - name: jconover/ai-rag-backend
+    newTag: v1.0.0
+  - name: jconover/ai-rag-frontend
+    newTag: v1.0.0
+  - name: qdrant/qdrant
+    newTag: v1.12.4
+  - name: redis
+    newTag: 7.4-alpine
+  - name: postgres
+    newTag: 16-alpine
+  - name: ollama/ollama
+    newTag: "0.5.4"
+
+# ConfigMap patches for production
+configMapGenerator:
+  - name: backend-config-prod
+    behavior: merge
+    literals:
+      - LOG_LEVEL=warning
+      - ENABLE_PROMETHEUS_METRICS=true
+      - AUTH_ENABLED=true

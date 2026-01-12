@@ -1,0 +1,16 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  namespace: ai-rag-stack
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: availability
+    app.kubernetes.io/part-of: ai-rag-stack
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+      app.kubernetes.io/component: api
