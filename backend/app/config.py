@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     # Qdrant
     qdrant_host: str = os.getenv("QDRANT_HOST", "localhost")
     qdrant_port: int = int(os.getenv("QDRANT_PORT", 6333))
+    qdrant_grpc_port: int = int(os.getenv("QDRANT_GRPC_PORT", 6334))
+    qdrant_prefer_grpc: bool = os.getenv("QDRANT_PREFER_GRPC", "true").lower() == "true"
+    qdrant_timeout: int = int(os.getenv("QDRANT_TIMEOUT", 30))
     qdrant_collection_name: str = os.getenv("QDRANT_COLLECTION_NAME", "devops_docs")
     
     # Redis
@@ -49,10 +52,18 @@ class Settings(BaseSettings):
     reranker_device: str = os.getenv("RERANKER_DEVICE", "auto")
     reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", 5))  # Final results after reranking
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", 20))  # Initial retrieval before reranking
+    reranker_max_length: int = int(os.getenv("RERANKER_MAX_LENGTH", 1024))  # Max sequence length for cross-encoder
 
     # Score thresholds for filtering low-quality results
     min_similarity_score: float = float(os.getenv("MIN_SIMILARITY_SCORE", 0.3))
     min_rerank_score: float = float(os.getenv("MIN_RERANK_SCORE", 0.01))
+
+    # Reranker Platt Scaling Calibration - converts raw scores to calibrated probabilities
+    # Platt scaling formula: P(relevant) = sigmoid(a * score + b)
+    # Use ScoreCalibrator.fit() to learn optimal a,b from labeled relevance data
+    reranker_calibration_enabled: bool = os.getenv("RERANKER_CALIBRATION_ENABLED", "false").lower() == "true"
+    reranker_calibration_a: float = float(os.getenv("RERANKER_CALIBRATION_A", "1.0"))
+    reranker_calibration_b: float = float(os.getenv("RERANKER_CALIBRATION_B", "0.0"))
 
     # Hybrid Search - BM25 (sparse) + Vector (dense) with RRF fusion
     hybrid_search_enabled: bool = os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
@@ -140,6 +151,11 @@ class Settings(BaseSettings):
     tracing_service_name: str = os.getenv("TRACING_SERVICE_NAME", "devops-ai-assistant")
     # Sampling ratio (0.0 to 1.0) - 1.0 means trace all requests
     tracing_sample_rate: float = float(os.getenv("TRACING_SAMPLE_RATE", "1.0"))
+
+    # Health Check Configuration
+    # When false (default), health endpoints hide internal details (hostnames, ports, connection strings)
+    # When true, full verbose output is returned (for debugging/development only)
+    health_check_verbose: bool = os.getenv("HEALTH_CHECK_VERBOSE", "false").lower() == "true"
 
     # Real-time Analytics Configuration
     analytics_enabled: bool = os.getenv("ANALYTICS_ENABLED", "true").lower() == "true"

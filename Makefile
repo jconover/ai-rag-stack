@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus backup backup-verify
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus backup backup-verify partition-query-logs partition-status partition-create partition-drop-old
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -34,6 +34,10 @@ help:
 	@echo "prometheus     - Open Prometheus UI in browser"
 	@echo "backup         - Backup all databases (PostgreSQL, Qdrant, Redis)"
 	@echo "backup-verify  - Verify the latest backup integrity"
+	@echo "partition-query-logs - Run initial query_logs partitioning migration"
+	@echo "partition-status     - Show query_logs partition status"
+	@echo "partition-create     - Create future partitions (3 months ahead)"
+	@echo "partition-drop-old   - Drop partitions older than 12 months"
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -234,3 +238,29 @@ backup:
 backup-verify:
 	@echo "Verifying latest backup..."
 	@bash scripts/backup_databases.sh --verify
+
+# =====================================================
+# Database Partition Management
+# =====================================================
+
+partition-query-logs:
+	@echo "Running query_logs partitioning migration..."
+	@echo "This will convert query_logs to a partitioned table."
+	docker exec -i postgres psql -U postgres -d devops_assistant < scripts/migrations/partition_query_logs.sql
+
+partition-status:
+	@echo "Checking query_logs partition status..."
+	docker exec rag-backend python /scripts/create_partitions.py --list
+
+partition-create:
+	@echo "Creating future partitions (3 months ahead)..."
+	docker exec rag-backend python /scripts/create_partitions.py --months-ahead 3
+
+partition-drop-old:
+	@echo "Dropping partitions older than 12 months..."
+	@echo "This is a destructive operation. Use --dry-run to preview."
+	docker exec rag-backend python /scripts/create_partitions.py --drop-old --retention-months 12
+
+partition-validate:
+	@echo "Validating partition health..."
+	docker exec rag-backend python /scripts/create_partitions.py --validate

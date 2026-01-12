@@ -41,15 +41,30 @@ def mock_settings():
 
 @pytest.fixture(scope="module")
 def mock_redis():
-    """Mock Redis client and connection pool."""
-    with patch("app.main.redis_pool") as mock_pool, \
-         patch("app.main.redis_client") as mock_client:
-        mock_pool.max_connections = 10
-        mock_pool._in_use_connections = set()
-        mock_pool._available_connections = []
-        mock_client.ping.return_value = True
-        mock_client.lrange.return_value = []
-        mock_client.pipeline.return_value = MagicMock()
+    """Mock Redis client and connection pool using the shared redis_client module."""
+    mock_pool = MagicMock()
+    mock_pool.max_connections = 10
+    mock_pool._in_use_connections = set()
+    mock_pool._available_connections = []
+
+    mock_client = MagicMock()
+    mock_client.ping.return_value = True
+    mock_client.lrange.return_value = []
+    mock_client.pipeline.return_value = MagicMock()
+
+    with patch("app.redis_client.get_redis_string_pool", return_value=mock_pool), \
+         patch("app.redis_client.get_redis_pool", return_value=mock_pool), \
+         patch("app.redis_client.get_redis_string_client", return_value=mock_client), \
+         patch("app.redis_client.get_redis_client", return_value=mock_client), \
+         patch("app.redis_client.is_redis_connected", return_value=True), \
+         patch("app.redis_client.get_redis_pool_stats", return_value={
+             "host": "localhost",
+             "port": 6379,
+             "db": 0,
+             "max_connections": 10,
+             "current_connections": 0,
+             "available_connections": 5,
+         }):
         yield mock_client
 
 

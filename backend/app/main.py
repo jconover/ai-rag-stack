@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Set
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -19,15 +19,20 @@ from sqlalchemy.sql import text
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-import redis
 import json
 
 from app.config import settings
+from app.redis_client import (
+    get_redis_string_client,
+    get_redis_pool_stats as get_shared_redis_pool_stats,
+    close_redis_pool,
+    is_redis_connected,
+)
 from app.models import (
-    ChatRequest, ChatResponse, HealthResponse,
+    ChatRequest, ChatResponse, HealthResponse, HealthResponseSafe, ServiceStatus,
     ModelsResponse, ModelInfo, StatsResponse,
-    FeedbackRequest, FeedbackResponse, RedisPoolStats,
-    PostgresPoolStats, QueryLogEntry, QueryLogsResponse,
+    FeedbackRequest, FeedbackResponse, RedisPoolStats, RedisPoolStatsSafe,
+    PostgresPoolStats, PostgresPoolStatsSafe, QueryLogEntry, QueryLogsResponse,
     QueryAnalyticsSummary,
     CircuitBreakerStatus, CircuitBreakersStatus, DeviceInfo,
     # A/B Testing models
@@ -46,6 +51,9 @@ from app.models import (
     # Real-time analytics models
     RealtimeAnalyticsResponse, LatencyMetrics, RequestMetrics,
     CacheMetrics, RetrievalQualityMetrics, ModelUsageStats, TopQueryEntry,
+    # Drift detection models
+    DriftCheckResponse, DriftStatusResponse, DriftHistoryResponse,
+    DriftHistoryEntry, DriftMetricsResponse, SetBaselineResponse,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
@@ -76,12 +84,44 @@ from app.circuit_breaker import (
     reset_all_circuit_breakers,
 )
 from app.analytics import get_metrics_collector, MetricsCollector
+from app.drift_detection import drift_detector, DriftStatus
 from app.device_utils import (
     get_device_info, log_device_configuration,
     get_actual_embedding_device, get_actual_reranker_device,
 )
 
 logger = logging.getLogger(__name__)
+
+# Set to hold references to background tasks to prevent garbage collection
+# Tasks are automatically removed when completed via the done callback
+_background_tasks: Set[asyncio.Task] = set()
+
+
+def _create_background_task(coro, task_name: str = "background_task"):
+    """Create a fire-and-forget background task with proper error handling.
+
+    This helper ensures:
+    1. Task reference is kept to prevent garbage collection
+    2. Errors are logged without propagating to the caller
+    3. Task is cleaned up automatically on completion
+
+    Args:
+        coro: The coroutine to run in the background
+        task_name: Descriptive name for logging purposes
+    """
+    task = asyncio.create_task(coro, name=task_name)
+    _background_tasks.add(task)
+
+    def _task_done_callback(t: asyncio.Task):
+        _background_tasks.discard(t)
+        # Check for unhandled exceptions (should be rare since tasks handle their own errors)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                logger.error(f"Unhandled exception in background task '{task_name}': {exc}")
+
+    task.add_done_callback(_task_done_callback)
+    return task
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -254,6 +294,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error closing PostgreSQL connections: {e}")
 
+    # Close shared Redis connection pool
+    try:
+        close_redis_pool()
+        logger.info("Redis connections closed")
+    except Exception as e:
+        logger.warning(f"Error closing Redis connections: {e}")
+
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
@@ -290,20 +337,13 @@ if settings.analytics_enabled:
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Redis connection pool for conversation memory
+# Redis client using shared connection pool from redis_client.py
 # Connection pooling improves performance by reusing connections instead of
 # creating new ones for each request. This reduces connection overhead and
 # prevents connection exhaustion under high load.
-redis_pool = redis.ConnectionPool(
-    host=settings.redis_host,
-    port=settings.redis_port,
-    db=settings.redis_db,
-    max_connections=settings.redis_max_connections,
-    socket_timeout=settings.redis_socket_timeout,
-    socket_connect_timeout=settings.redis_socket_connect_timeout,
-    decode_responses=True
-)
-redis_client = redis.Redis(connection_pool=redis_pool)
+# The shared pool is used by both main.py (conversation memory) and
+# vectorstore.py (embedding cache) to reduce total connection count.
+redis_client = get_redis_string_client()
 
 
 def get_redis_pool_stats() -> dict:
@@ -312,21 +352,7 @@ def get_redis_pool_stats() -> dict:
     Returns:
         Dictionary with pool configuration and current usage stats
     """
-    try:
-        pool_info = {
-            "max_connections": redis_pool.max_connections,
-            "current_connections": len(redis_pool._in_use_connections),
-            "available_connections": len(redis_pool._available_connections),
-            "host": settings.redis_host,
-            "port": settings.redis_port,
-            "db": settings.redis_db,
-        }
-        return pool_info
-    except Exception:
-        return {
-            "max_connections": settings.redis_max_connections,
-            "error": "Unable to retrieve pool stats"
-        }
+    return get_shared_redis_pool_stats()
 
 
 def get_conversation_history(session_id: str, limit: int = 5) -> list:
@@ -493,17 +519,20 @@ def _build_circuit_breaker_status(name: str, status: dict) -> CircuitBreakerStat
     )
 
 
-@app.get("/api/health", response_model=HealthResponse)
+@app.get("/api/health")
 async def health_check():
-    """Health check endpoint with component status including reranker, Redis pool, PostgreSQL, and circuit breakers."""
+    """Health check endpoint with component status.
+
+    By default, returns a safe response without internal details (hostnames, ports).
+    Set HEALTH_CHECK_VERBOSE=true to include full connection details for debugging.
+
+    Returns:
+        HealthResponseSafe (default) or HealthResponse (verbose mode)
+    """
     ollama_connected = rag_pipeline.is_ollama_connected()
     qdrant_connected = vector_store.is_connected()
 
-    try:
-        redis_client.ping()
-        redis_connected = True
-    except:
-        redis_connected = False
+    redis_connected = is_redis_connected()
 
     # Check PostgreSQL connection
     postgres_connected = await check_postgres_connection()
@@ -511,40 +540,9 @@ async def health_check():
     # Get reranker status
     reranker_status = rag_pipeline.get_reranker_status()
 
-    # Get Redis pool statistics
-    pool_stats = get_redis_pool_stats()
-    redis_pool_stats = RedisPoolStats(
-        max_connections=pool_stats.get("max_connections", settings.redis_max_connections),
-        current_connections=pool_stats.get("current_connections"),
-        available_connections=pool_stats.get("available_connections"),
-        host=pool_stats.get("host"),
-        port=pool_stats.get("port"),
-        db=pool_stats.get("db"),
-    )
-
-    # Get PostgreSQL pool statistics
-    pg_pool_stats = await get_postgres_pool_stats()
-    postgres_pool_stats = PostgresPoolStats(
-        host=pg_pool_stats.get("host"),
-        port=pg_pool_stats.get("port"),
-        database=pg_pool_stats.get("database"),
-        pool_size=pg_pool_stats.get("pool_size", settings.postgres_pool_size),
-        max_overflow=pg_pool_stats.get("max_overflow", settings.postgres_max_overflow),
-        checked_in=pg_pool_stats.get("checked_in"),
-        checked_out=pg_pool_stats.get("checked_out"),
-        overflow=pg_pool_stats.get("overflow"),
-        pool_timeout=pg_pool_stats.get("pool_timeout"),
-    )
-
     # Get circuit breaker status
     cb_states = get_circuit_breaker_states()
     cb_healthy = get_circuit_breakers_healthy()
-    circuit_breakers_status = CircuitBreakersStatus(
-        healthy=cb_healthy,
-        ollama=_build_circuit_breaker_status("ollama", cb_states.get("ollama", {})),
-        qdrant=_build_circuit_breaker_status("qdrant", cb_states.get("qdrant", {})),
-        tavily=_build_circuit_breaker_status("tavily", cb_states.get("tavily", {})),
-    )
 
     # Get ML device information
     device_info_dict = get_device_info()
@@ -578,19 +576,125 @@ async def health_check():
     else:
         status = "unhealthy"
 
-    return HealthResponse(
+    # Return verbose response with internal details if enabled (for debugging only)
+    if settings.health_check_verbose:
+        # Get Redis pool statistics (includes sensitive host/port info)
+        pool_stats = get_redis_pool_stats()
+        redis_pool_stats = RedisPoolStats(
+            max_connections=pool_stats.get("max_connections", settings.redis_max_connections),
+            current_connections=pool_stats.get("current_connections"),
+            available_connections=pool_stats.get("available_connections"),
+            host=pool_stats.get("host"),
+            port=pool_stats.get("port"),
+            db=pool_stats.get("db"),
+        )
+
+        # Get PostgreSQL pool statistics (includes sensitive host/port info)
+        pg_pool_stats = await get_postgres_pool_stats()
+        postgres_pool_stats = PostgresPoolStats(
+            host=pg_pool_stats.get("host"),
+            port=pg_pool_stats.get("port"),
+            database=pg_pool_stats.get("database"),
+            pool_size=pg_pool_stats.get("pool_size", settings.postgres_pool_size),
+            max_overflow=pg_pool_stats.get("max_overflow", settings.postgres_max_overflow),
+            checked_in=pg_pool_stats.get("checked_in"),
+            checked_out=pg_pool_stats.get("checked_out"),
+            overflow=pg_pool_stats.get("overflow"),
+            pool_timeout=pg_pool_stats.get("pool_timeout"),
+        )
+
+        # Full circuit breaker status with all details
+        circuit_breakers_status = CircuitBreakersStatus(
+            healthy=cb_healthy,
+            ollama=_build_circuit_breaker_status("ollama", cb_states.get("ollama", {})),
+            qdrant=_build_circuit_breaker_status("qdrant", cb_states.get("qdrant", {})),
+            tavily=_build_circuit_breaker_status("tavily", cb_states.get("tavily", {})),
+        )
+
+        return HealthResponse(
+            status=status,
+            ollama_connected=ollama_connected,
+            qdrant_connected=qdrant_connected,
+            redis_connected=redis_connected,
+            postgres_connected=postgres_connected,
+            reranker_enabled=reranker_status.get('enabled', False),
+            reranker_loaded=reranker_status.get('loaded', False),
+            reranker_model=reranker_status.get('model_name'),
+            device_info=device_info_response,
+            redis_pool=redis_pool_stats,
+            postgres_pool=postgres_pool_stats,
+            circuit_breakers=circuit_breakers_status,
+        )
+
+    # Return safe response without sensitive internal details (default)
+    # Get additional safe metrics for richer response
+    ollama_models_count = None
+    if ollama_connected:
+        try:
+            models = rag_pipeline.list_models()
+            ollama_models_count = len(models) if models else 0
+        except Exception:
+            pass  # Keep as None if we can't get model count
+
+    qdrant_points_count = None
+    if qdrant_connected:
+        try:
+            stats = vector_store.get_stats()
+            qdrant_points_count = stats.get('points_count', 0)
+        except Exception:
+            pass  # Keep as None if we can't get stats
+
+    # Calculate pool utilization for Redis (safe metric)
+    redis_pool_utilization = None
+    pool_stats = get_redis_pool_stats()
+    max_conn = pool_stats.get("max_connections", 0)
+    current_conn = pool_stats.get("current_connections")
+    if max_conn > 0 and current_conn is not None:
+        redis_pool_utilization = round((current_conn / max_conn) * 100, 1)
+
+    # Calculate pool utilization for PostgreSQL (safe metric)
+    postgres_pool_utilization = None
+    pg_pool_stats = await get_postgres_pool_stats()
+    pg_pool_size = pg_pool_stats.get("pool_size", 0)
+    pg_checked_out = pg_pool_stats.get("checked_out")
+    if pg_pool_size > 0 and pg_checked_out is not None:
+        postgres_pool_utilization = round((pg_checked_out / pg_pool_size) * 100, 1)
+
+    # Build safe service status
+    services = {
+        "ollama": ServiceStatus(
+            status="connected" if ollama_connected else "disconnected",
+            models_available=ollama_models_count,
+        ),
+        "qdrant": ServiceStatus(
+            status="connected" if qdrant_connected else "disconnected",
+            points_count=qdrant_points_count,
+        ),
+        "redis": ServiceStatus(
+            status="connected" if redis_connected else "disconnected",
+            pool_utilization=redis_pool_utilization,
+        ),
+        "postgres": ServiceStatus(
+            status="connected" if postgres_connected else "disconnected",
+            pool_utilization=postgres_pool_utilization,
+        ),
+    }
+
+    # Safe circuit breaker status (state only, no sensitive details)
+    cb_states_safe = {
+        name: state.get("status", {}).get("state", "unknown")
+        for name, state in cb_states.items()
+    }
+
+    return HealthResponseSafe(
         status=status,
-        ollama_connected=ollama_connected,
-        qdrant_connected=qdrant_connected,
-        redis_connected=redis_connected,
-        postgres_connected=postgres_connected,
-        reranker_enabled=reranker_status.get('enabled', False),
-        reranker_loaded=reranker_status.get('loaded', False),
-        reranker_model=reranker_status.get('model_name'),
+        services=services,
+        reranker={
+            "enabled": reranker_status.get('enabled', False),
+            "loaded": reranker_status.get('loaded', False),
+        },
         device_info=device_info_response,
-        redis_pool=redis_pool_stats,
-        postgres_pool=postgres_pool_stats,
-        circuit_breakers=circuit_breakers_status,
+        circuit_breakers=cb_states_safe,
     )
 
 
@@ -990,16 +1094,20 @@ async def chat(
                 request.state.analytics_avg_score = retrieval_metrics.get('avg_similarity_score')
 
         # Log query to PostgreSQL (fire-and-forget, non-blocking)
-        # Uses create_task to avoid blocking response on DB write
+        # Uses _create_background_task to avoid blocking response on DB write
+        # and ensure proper task lifecycle management with error logging
         if settings.query_logging_enabled:
-            asyncio.create_task(log_query_to_postgres(
-                session_id=session_id,
-                query=chat_request.message,
-                model=result['model'],
-                result=result,
-                total_time_ms=total_time_ms,
-                user_id=user_id,
-            ))
+            _create_background_task(
+                log_query_to_postgres(
+                    session_id=session_id,
+                    query=chat_request.message,
+                    model=result['model'],
+                    result=result,
+                    total_time_ms=total_time_ms,
+                    user_id=user_id,
+                ),
+                task_name="query_logging"
+            )
 
         # Record experiment metrics if in an active experiment
         if experiment_id and variant_name:
@@ -1379,6 +1487,197 @@ async def get_retrieval_metrics(last_n: int = 100):
             "summary": summary
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================
+# Model Drift Detection Endpoints
+# =====================
+
+
+@app.get("/api/metrics/drift", response_model=DriftCheckResponse)
+async def check_drift_status():
+    """Check embedding model drift status.
+
+    Compares current similarity score distribution against the stored baseline
+    to detect significant shifts that may indicate model degradation or data
+    distribution changes.
+
+    Returns:
+        DriftCheckResponse with:
+        - status: stable, drift_detected, warning, insufficient_data, no_baseline
+        - mean_shift_pct: Percentage change in mean score
+        - current: Current window statistics
+        - baseline: Baseline statistics for comparison
+
+    Example response when drift is detected:
+    {
+        "status": "drift_detected",
+        "message": "Significant drift detected: mean score shifted 18.5%...",
+        "mean_shift_pct": 18.5,
+        "current": {"mean_score": 0.62, "std_score": 0.15, ...},
+        "baseline": {"mean_score": 0.76, "std_score": 0.12, ...}
+    }
+    """
+    try:
+        result = await drift_detector.check_drift()
+        return DriftCheckResponse(
+            status=result.status.value,
+            message=result.message,
+            checked_at=result.checked_at,
+            mean_shift_pct=result.mean_shift_pct,
+            std_shift_pct=result.std_shift_pct,
+            median_shift_pct=result.median_shift_pct,
+            current=DriftMetricsResponse(
+                mean_score=result.current_metrics.mean_score,
+                std_score=result.current_metrics.std_score,
+                p25=result.current_metrics.p25,
+                p50=result.current_metrics.p50,
+                p75=result.current_metrics.p75,
+                min_score=result.current_metrics.min_score,
+                max_score=result.current_metrics.max_score,
+                sample_count=result.current_metrics.sample_count,
+                timestamp=result.current_metrics.timestamp,
+            ) if result.current_metrics else None,
+            baseline=DriftMetricsResponse(
+                mean_score=result.baseline_metrics.mean_score,
+                std_score=result.baseline_metrics.std_score,
+                p25=result.baseline_metrics.p25,
+                p50=result.baseline_metrics.p50,
+                p75=result.baseline_metrics.p75,
+                min_score=result.baseline_metrics.min_score,
+                max_score=result.baseline_metrics.max_score,
+                sample_count=result.baseline_metrics.sample_count,
+                timestamp=result.baseline_metrics.timestamp,
+            ) if result.baseline_metrics else None,
+        )
+    except Exception as e:
+        logger.error(f"Drift check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/metrics/drift/status", response_model=DriftStatusResponse)
+async def get_drift_detector_status():
+    """Get drift detector configuration and current state.
+
+    Returns detector settings and current buffer status for debugging
+    and monitoring the drift detection system itself.
+
+    Returns:
+        DriftStatusResponse with configuration and state information
+    """
+    try:
+        status = drift_detector.get_status()
+        return DriftStatusResponse(**status)
+    except Exception as e:
+        logger.error(f"Failed to get drift detector status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/metrics/drift/baseline", response_model=SetBaselineResponse)
+async def set_drift_baseline():
+    """Set the current score distribution as the baseline for drift detection.
+
+    Call this endpoint after confirming the system is performing well to
+    establish a reference point for future drift comparisons. The baseline
+    is stored persistently in Redis.
+
+    Returns:
+        SetBaselineResponse with success status and the baseline metrics
+
+    Raises:
+        400: If there is insufficient data to compute baseline
+    """
+    try:
+        # Compute current metrics
+        metrics = drift_detector.compute_metrics()
+        if metrics is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient data for baseline. Need at least {drift_detector.MIN_SAMPLES} samples."
+            )
+
+        # Set as baseline
+        success = await drift_detector.set_baseline(metrics)
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to store baseline in Redis"
+            )
+
+        return SetBaselineResponse(
+            success=True,
+            message=f"Baseline set with {metrics.sample_count} samples. Mean: {metrics.mean_score:.4f}",
+            baseline=DriftMetricsResponse(
+                mean_score=metrics.mean_score,
+                std_score=metrics.std_score,
+                p25=metrics.p25,
+                p50=metrics.p50,
+                p75=metrics.p75,
+                min_score=metrics.min_score,
+                max_score=metrics.max_score,
+                sample_count=metrics.sample_count,
+                timestamp=metrics.timestamp,
+            )
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set baseline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/metrics/drift/history", response_model=DriftHistoryResponse)
+async def get_drift_history(days: int = Query(7, ge=1, le=30)):
+    """Get historical drift metrics for trend analysis.
+
+    Returns daily aggregated metrics for the specified number of days,
+    useful for visualizing trends and detecting gradual drift.
+
+    Args:
+        days: Number of days of history to retrieve (1-30, default 7)
+
+    Returns:
+        DriftHistoryResponse with daily metrics
+    """
+    try:
+        history = await drift_detector.get_history(days=days)
+        return DriftHistoryResponse(
+            history=[DriftHistoryEntry(**entry) for entry in history],
+            days_requested=days,
+            days_returned=len(history),
+        )
+    except Exception as e:
+        logger.error(f"Failed to get drift history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/metrics/drift/reset")
+async def reset_drift_detection():
+    """Reset drift detection state.
+
+    Clears all stored scores and the baseline. Use with caution as this
+    will require re-establishing a baseline before drift detection works.
+
+    Returns:
+        Status message confirming reset
+    """
+    try:
+        success = await drift_detector.reset()
+        if success:
+            return {
+                "status": "reset",
+                "message": "Drift detection state cleared. Set a new baseline when ready."
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to reset drift detection state"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reset drift detection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

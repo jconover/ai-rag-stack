@@ -33,6 +33,7 @@ from app.circuit_breaker import (
 )
 from app.output_validation import validate_response, ValidationResult
 from app.tracing import get_tracer, create_span, SpanAttributes
+from app.drift_detection import drift_detector
 
 logger = logging.getLogger(__name__)
 
@@ -885,6 +886,14 @@ Question: {query}"""
                 )
             except Exception as e:
                 logger.warning(f"Failed to log retrieval metrics: {e}")
+
+        # Record scores for drift detection (uses similarity scores for consistency)
+        # This enables monitoring of embedding quality over time
+        if result.similarity_scores:
+            try:
+                drift_detector.record_scores(result.similarity_scores)
+            except Exception as e:
+                logger.debug(f"Failed to record drift scores: {e}")
 
         return result
 

@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import threading
+
 import redis
 
 from app.circuit_breaker import (
@@ -57,6 +58,7 @@ except ImportError:
 
 from app.config import settings
 from app.device_utils import get_optimal_device, get_actual_embedding_device
+from app.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -148,22 +150,18 @@ class RedisEmbeddingCache:
             self._init_redis()
 
     def _init_redis(self) -> None:
-        """Initialize Redis connection with connection pooling."""
+        """Initialize Redis connection using shared connection pool.
+
+        Uses the shared bytes pool from redis_client.py for efficient
+        connection reuse across the application. The bytes pool is used
+        because we need raw bytes for JSON serialization of embeddings.
+        """
         try:
-            # Create connection pool for efficient connection reuse
-            pool = redis.ConnectionPool(
-                host=settings.redis_host,
-                port=settings.redis_port,
-                db=settings.redis_db,
-                max_connections=settings.redis_max_connections,
-                socket_timeout=settings.redis_socket_timeout,
-                socket_connect_timeout=settings.redis_socket_connect_timeout,
-                decode_responses=False,  # We need bytes for JSON serialization
-            )
-            self._redis_client = redis.Redis(connection_pool=pool)
+            # Use shared connection pool (decode_responses=False for bytes)
+            self._redis_client = get_redis_client()
             # Test connection
             self._redis_client.ping()
-            logger.info("Redis embedding cache initialized successfully")
+            logger.info("Redis embedding cache initialized with shared pool")
         except redis.ConnectionError as e:
             logger.warning(f"Failed to connect to Redis for embedding cache: {e}")
             self._redis_client = None
@@ -428,12 +426,13 @@ class VectorStore:
 
     def __init__(self):
         # Use gRPC for better performance (lower latency, higher throughput)
+        # gRPC provides ~30% lower latency and higher throughput than REST
         self.client = QdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
-            grpc_port=6334,
-            prefer_grpc=True,
-            timeout=30,  # 30 second timeout for operations
+            grpc_port=settings.qdrant_grpc_port,
+            prefer_grpc=settings.qdrant_prefer_grpc,
+            timeout=settings.qdrant_timeout,
         )
         # Use shared embedding model singleton to reduce memory in multi-worker deployments
         # The model is lazily initialized and warmed up on first access

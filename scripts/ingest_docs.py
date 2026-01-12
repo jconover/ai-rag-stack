@@ -11,6 +11,7 @@ Features:
 - Incremental ingestion with change detection (only re-process changed files)
 - Idempotent ingestion using content-based deterministic UUIDs (no duplicates on re-run)
 - Chunk deduplication (exact and fuzzy) to remove duplicate content before embedding
+- Transactional consistency with two-phase commit between registry and Qdrant
 
 Usage:
     python ingest_docs.py              # Incremental ingestion (default)
@@ -20,6 +21,7 @@ Usage:
     python ingest_docs.py --check-duplicates  # Check for duplicate vectors
     python ingest_docs.py --no-dedup   # Disable chunk deduplication
     python ingest_docs.py --fuzzy-dedup --fuzzy-threshold 0.9  # Enable fuzzy dedup
+    python ingest_docs.py --cleanup-orphans  # Clean up orphaned staging entries
 
 Environment Variables (Deduplication):
     DEDUPLICATION_ENABLED=true         # Enable/disable chunk deduplication (default: true)
@@ -29,13 +31,19 @@ Environment Variables (Deduplication):
 
 import argparse
 import hashlib
+import json
 import os
 import sys
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Set, Tuple
+from typing import List, Optional, Dict, Set, Tuple, Any
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import logging
+
+logger = logging.getLogger(__name__)
 
 from langchain_community.document_loaders import (
     DirectoryLoader,
@@ -147,6 +155,414 @@ def generate_chunk_id(source_path: str, chunk_index: int, content: str) -> str:
     identifier = f"{source_path}:{chunk_index}:{content_hash}"
     # Generate deterministic UUID5
     return str(uuid.uuid5(CHUNK_ID_NAMESPACE, identifier))
+
+
+@dataclass
+class StagedChunk:
+    """Represents a chunk staged for ingestion."""
+    chunk_id: str
+    source_path: str
+    content_hash: str
+    metadata: Dict[str, Any]
+    status: str = "staged"  # staged, committed, rolled_back
+    staged_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class IngestionTransaction:
+    """Two-phase commit transaction for document ingestion.
+
+    Ensures transactional consistency between the ingestion registry (SQLite)
+    and Qdrant vector database. Prevents orphaned chunks when Qdrant insertion
+    fails after registry update.
+
+    Usage:
+        with IngestionTransaction(registry, qdrant_client) as txn:
+            # Stage chunks before Qdrant insertion
+            for chunk in chunks:
+                txn.stage_chunk(chunk_id, source_path, content_hash, metadata)
+
+            # Insert into Qdrant
+            qdrant_client.upsert(points)
+
+            # Mark transaction as committed after successful Qdrant upsert
+            txn.commit()
+
+        # If an exception occurs, rollback is automatic via __exit__
+    """
+
+    def __init__(self, registry: 'IngestionRegistry', qdrant_client: 'QdrantClient',
+                 collection_name: str = COLLECTION_NAME):
+        """Initialize the transaction.
+
+        Args:
+            registry: IngestionRegistry instance for SQLite operations
+            qdrant_client: QdrantClient for vector database operations
+            collection_name: Qdrant collection name for rollback operations
+        """
+        self.registry = registry
+        self.qdrant_client = qdrant_client
+        self.collection_name = collection_name
+        self.staged_chunks: List[StagedChunk] = []
+        self.committed = False
+        self.transaction_id = str(uuid.uuid4())
+        self._init_staging_table()
+
+    def _init_staging_table(self):
+        """Initialize the staging table in SQLite if it doesn't exist."""
+        with self.registry._get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS staging_chunks (
+                    transaction_id TEXT NOT NULL,
+                    chunk_id TEXT NOT NULL,
+                    source_path TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    metadata TEXT,
+                    status TEXT NOT NULL DEFAULT 'staged',
+                    staged_at TEXT NOT NULL,
+                    committed_at TEXT,
+                    PRIMARY KEY (transaction_id, chunk_id)
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_staging_status
+                ON staging_chunks(status)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_staging_transaction
+                ON staging_chunks(transaction_id)
+            """)
+            conn.commit()
+
+    def __enter__(self) -> 'IngestionTransaction':
+        """Enter the transaction context."""
+        logger.debug(f"Starting ingestion transaction {self.transaction_id}")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the transaction context, rolling back if not committed."""
+        if exc_type is not None:
+            # An exception occurred, perform rollback
+            logger.warning(f"Exception in transaction {self.transaction_id}: {exc_val}")
+            self.rollback()
+        elif not self.committed:
+            # No exception but not committed, still rollback
+            logger.warning(f"Transaction {self.transaction_id} not committed, rolling back")
+            self.rollback()
+        return False  # Don't suppress exceptions
+
+    def stage_chunk(self, chunk_id: str, source_path: str, content_hash: str,
+                    metadata: Dict[str, Any]) -> StagedChunk:
+        """Stage a chunk before Qdrant insertion.
+
+        Args:
+            chunk_id: Deterministic UUID for the chunk
+            source_path: Path to the source file
+            content_hash: Hash of the chunk content
+            metadata: Chunk metadata dictionary
+
+        Returns:
+            StagedChunk instance
+        """
+        staged = StagedChunk(
+            chunk_id=chunk_id,
+            source_path=source_path,
+            content_hash=content_hash,
+            metadata=metadata,
+            status="staged",
+            staged_at=datetime.utcnow().isoformat(),
+        )
+        self.staged_chunks.append(staged)
+
+        # Persist to staging table for recovery
+        with self.registry._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO staging_chunks
+                (transaction_id, chunk_id, source_path, content_hash, metadata, status, staged_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                self.transaction_id,
+                chunk_id,
+                source_path,
+                content_hash,
+                json.dumps(metadata),
+                "staged",
+                staged.staged_at,
+            ))
+            conn.commit()
+
+        return staged
+
+    def stage_chunks_batch(self, chunks: List[Tuple[str, str, str, Dict[str, Any]]]) -> List[StagedChunk]:
+        """Stage multiple chunks efficiently in a single transaction.
+
+        Args:
+            chunks: List of (chunk_id, source_path, content_hash, metadata) tuples
+
+        Returns:
+            List of StagedChunk instances
+        """
+        staged_list = []
+        now = datetime.utcnow().isoformat()
+
+        with self.registry._get_connection() as conn:
+            for chunk_id, source_path, content_hash, metadata in chunks:
+                staged = StagedChunk(
+                    chunk_id=chunk_id,
+                    source_path=source_path,
+                    content_hash=content_hash,
+                    metadata=metadata,
+                    status="staged",
+                    staged_at=now,
+                )
+                staged_list.append(staged)
+
+                conn.execute("""
+                    INSERT OR REPLACE INTO staging_chunks
+                    (transaction_id, chunk_id, source_path, content_hash, metadata, status, staged_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    self.transaction_id,
+                    chunk_id,
+                    source_path,
+                    content_hash,
+                    json.dumps(metadata),
+                    "staged",
+                    now,
+                ))
+            conn.commit()
+
+        self.staged_chunks.extend(staged_list)
+        return staged_list
+
+    def commit(self) -> bool:
+        """Mark all staged chunks as committed after successful Qdrant upsert.
+
+        This is the second phase of the two-phase commit. Call this only after
+        Qdrant upsert succeeds.
+
+        Returns:
+            True if commit succeeded
+        """
+        if self.committed:
+            logger.warning(f"Transaction {self.transaction_id} already committed")
+            return True
+
+        now = datetime.utcnow().isoformat()
+
+        try:
+            with self.registry._get_connection() as conn:
+                # Update all staged chunks to committed
+                conn.execute("""
+                    UPDATE staging_chunks
+                    SET status = 'committed', committed_at = ?
+                    WHERE transaction_id = ? AND status = 'staged'
+                """, (now, self.transaction_id))
+                conn.commit()
+
+            # Update in-memory state
+            for chunk in self.staged_chunks:
+                chunk.status = "committed"
+
+            self.committed = True
+            logger.info(f"Transaction {self.transaction_id} committed: {len(self.staged_chunks)} chunks")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to commit transaction {self.transaction_id}: {e}")
+            return False
+
+    def rollback(self) -> int:
+        """Rollback staged chunks on failure.
+
+        Removes staged entries from the staging table and attempts to delete
+        any chunks that may have been inserted into Qdrant.
+
+        Returns:
+            Number of chunks rolled back
+        """
+        if self.committed:
+            logger.warning(f"Cannot rollback committed transaction {self.transaction_id}")
+            return 0
+
+        rolled_back = 0
+
+        try:
+            # Get chunk IDs that were staged
+            chunk_ids = [c.chunk_id for c in self.staged_chunks]
+
+            if chunk_ids and self.qdrant_client is not None:
+                # Attempt to delete from Qdrant (best effort)
+                try:
+                    self.qdrant_client.delete(
+                        collection_name=self.collection_name,
+                        points_selector=chunk_ids,
+                    )
+                    logger.info(f"Deleted {len(chunk_ids)} chunks from Qdrant during rollback")
+                except Exception as e:
+                    logger.warning(f"Failed to delete chunks from Qdrant during rollback: {e}")
+
+            # Update staging table
+            with self.registry._get_connection() as conn:
+                cursor = conn.execute("""
+                    UPDATE staging_chunks
+                    SET status = 'rolled_back'
+                    WHERE transaction_id = ? AND status = 'staged'
+                """, (self.transaction_id,))
+                rolled_back = cursor.rowcount
+                conn.commit()
+
+            # Update in-memory state
+            for chunk in self.staged_chunks:
+                if chunk.status == "staged":
+                    chunk.status = "rolled_back"
+
+            self.staged_chunks.clear()
+            logger.info(f"Transaction {self.transaction_id} rolled back: {rolled_back} chunks")
+
+        except Exception as e:
+            logger.error(f"Error during rollback of transaction {self.transaction_id}: {e}")
+
+        return rolled_back
+
+    @staticmethod
+    def cleanup_orphaned_entries(registry: 'IngestionRegistry',
+                                  qdrant_client: 'QdrantClient',
+                                  collection_name: str = COLLECTION_NAME,
+                                  max_age_hours: int = 24) -> Dict[str, int]:
+        """Clean up orphaned staging entries from failed transactions.
+
+        This should be run periodically or on startup to clean up entries from
+        transactions that failed without proper rollback (e.g., process crash).
+
+        Args:
+            registry: IngestionRegistry instance
+            qdrant_client: QdrantClient instance
+            collection_name: Qdrant collection name
+            max_age_hours: Maximum age in hours for staged entries before cleanup
+
+        Returns:
+            Dict with cleanup statistics
+        """
+        stats = {
+            "orphaned_staged": 0,
+            "rolled_back": 0,
+            "deleted_from_qdrant": 0,
+            "cleaned_committed": 0,
+        }
+
+        try:
+            cutoff_time = datetime.utcnow()
+            cutoff_iso = cutoff_time.isoformat()
+
+            with registry._get_connection() as conn:
+                # Find orphaned staged entries (older than max_age_hours)
+                rows = conn.execute("""
+                    SELECT transaction_id, chunk_id, staged_at
+                    FROM staging_chunks
+                    WHERE status = 'staged'
+                    AND datetime(staged_at) < datetime(?, '-' || ? || ' hours')
+                """, (cutoff_iso, max_age_hours)).fetchall()
+
+                stats["orphaned_staged"] = len(rows)
+
+                if rows:
+                    # Group by transaction
+                    orphaned_by_txn: Dict[str, List[str]] = {}
+                    for row in rows:
+                        txn_id = row['transaction_id']
+                        if txn_id not in orphaned_by_txn:
+                            orphaned_by_txn[txn_id] = []
+                        orphaned_by_txn[txn_id].append(row['chunk_id'])
+
+                    logger.info(f"Found {len(orphaned_by_txn)} orphaned transactions with "
+                               f"{len(rows)} staged chunks")
+
+                    # Attempt to delete from Qdrant and mark as rolled back
+                    for txn_id, chunk_ids in orphaned_by_txn.items():
+                        try:
+                            # Delete from Qdrant
+                            qdrant_client.delete(
+                                collection_name=collection_name,
+                                points_selector=chunk_ids,
+                            )
+                            stats["deleted_from_qdrant"] += len(chunk_ids)
+                        except Exception as e:
+                            logger.warning(f"Failed to delete orphaned chunks from Qdrant: {e}")
+
+                        # Mark as rolled back
+                        conn.execute("""
+                            UPDATE staging_chunks
+                            SET status = 'rolled_back'
+                            WHERE transaction_id = ?
+                        """, (txn_id,))
+                        stats["rolled_back"] += len(chunk_ids)
+
+                # Clean up old committed and rolled_back entries (keep for audit trail)
+                # Only delete entries older than 7 days
+                cursor = conn.execute("""
+                    DELETE FROM staging_chunks
+                    WHERE status IN ('committed', 'rolled_back')
+                    AND datetime(staged_at) < datetime(?, '-7 days')
+                """, (cutoff_iso,))
+                stats["cleaned_committed"] = cursor.rowcount
+
+                conn.commit()
+
+        except Exception as e:
+            logger.error(f"Error during orphan cleanup: {e}")
+
+        return stats
+
+    @staticmethod
+    def get_staging_stats(registry: 'IngestionRegistry') -> Dict[str, Any]:
+        """Get statistics about the staging table.
+
+        Args:
+            registry: IngestionRegistry instance
+
+        Returns:
+            Dict with staging table statistics
+        """
+        try:
+            with registry._get_connection() as conn:
+                # Count by status
+                rows = conn.execute("""
+                    SELECT status, COUNT(*) as count
+                    FROM staging_chunks
+                    GROUP BY status
+                """).fetchall()
+
+                by_status = {row['status']: row['count'] for row in rows}
+
+                # Count distinct transactions
+                txn_count = conn.execute("""
+                    SELECT COUNT(DISTINCT transaction_id) as count
+                    FROM staging_chunks
+                """).fetchone()['count']
+
+                # Get oldest staged entry
+                oldest = conn.execute("""
+                    SELECT MIN(staged_at) as oldest
+                    FROM staging_chunks
+                    WHERE status = 'staged'
+                """).fetchone()['oldest']
+
+                return {
+                    "by_status": by_status,
+                    "total_transactions": txn_count,
+                    "total_entries": sum(by_status.values()),
+                    "staged_count": by_status.get("staged", 0),
+                    "committed_count": by_status.get("committed", 0),
+                    "rolled_back_count": by_status.get("rolled_back", 0),
+                    "oldest_staged": oldest,
+                }
+        except Exception as e:
+            logger.error(f"Error getting staging stats: {e}")
+            return {
+                "error": str(e),
+                "by_status": {},
+                "total_entries": 0,
+            }
 
 
 class DocumentIngestionPipeline:
@@ -993,10 +1409,16 @@ class DocumentIngestionPipeline:
 
     def _ingest_chunks_with_registry(self, chunks: List[Document], collection_name: str = COLLECTION_NAME):
         """
-        Ingest chunks and update the registry with file tracking.
+        Ingest chunks and update the registry with file tracking using two-phase commit.
 
         Uses idempotent content-based UUIDs for all ingestion modes to prevent
         duplicate vectors on re-run. Same content always maps to same ID.
+
+        Two-phase commit ensures:
+        1. Chunks are staged in registry before Qdrant insertion
+        2. Only marked as committed after successful Qdrant upsert
+        3. Automatic rollback on failure (removes from Qdrant if needed)
+        4. Orphaned chunks can be cleaned up on startup
 
         Args:
             chunks: List of Document chunks to ingest
@@ -1005,7 +1427,7 @@ class DocumentIngestionPipeline:
         if not chunks:
             return
 
-        print(f"Ingesting {len(chunks)} chunks into Qdrant...")
+        print(f"Ingesting {len(chunks)} chunks into Qdrant with transactional consistency...")
 
         # Group chunks by source file for registry tracking
         chunks_by_source: Dict[str, List[Document]] = {}
@@ -1015,17 +1437,62 @@ class DocumentIngestionPipeline:
                 chunks_by_source[source] = []
             chunks_by_source[source].append(chunk)
 
-        # Use hybrid or dense-only ingestion with idempotent UUIDs
-        if self.use_hybrid and self.sparse_encoder is not None:
-            self._ingest_hybrid(chunks, collection_name)
-        else:
-            self._ingest_dense_only(chunks, collection_name)
+        # Use two-phase commit for transactional consistency
+        with IngestionTransaction(self.registry, self.client, collection_name) as txn:
+            # Phase 1: Stage all chunks before Qdrant insertion
+            print(f"Phase 1: Staging {len(chunks)} chunks in registry...")
 
-        # Update registry for each file with chunk IDs
+            # Pre-compute chunk IDs for staging (same logic as _ingest_hybrid/_ingest_dense_only)
+            source_chunk_indices: Dict[str, int] = {}
+            staging_data = []
+
+            for chunk in chunks:
+                source = chunk.metadata.get('source', 'unknown')
+                if source not in source_chunk_indices:
+                    source_chunk_indices[source] = 0
+                chunk_index = source_chunk_indices[source]
+                source_chunk_indices[source] += 1
+
+                # Generate deterministic UUID
+                chunk_id = generate_chunk_id(source, chunk_index, chunk.page_content)
+                content_hash = hashlib.md5(chunk.page_content.encode()).hexdigest()
+
+                # Store ID in chunk metadata for later use
+                chunk.metadata['chunk_id'] = chunk_id
+                chunk.metadata['chunk_index'] = chunk_index
+
+                # Prepare staging data
+                staging_data.append((
+                    chunk_id,
+                    source,
+                    content_hash,
+                    {
+                        'source_type': chunk.metadata.get('source_type', 'unknown'),
+                        'chunk_index': chunk_index,
+                        'file_size': chunk.metadata.get('file_size', 0),
+                    }
+                ))
+
+            # Batch stage all chunks
+            txn.stage_chunks_batch(staging_data)
+            print(f"Staged {len(staging_data)} chunks in transaction {txn.transaction_id}")
+
+            # Phase 2: Insert into Qdrant (using existing methods but skipping ID generation)
+            print(f"Phase 2: Inserting into Qdrant...")
+            if self.use_hybrid and self.sparse_encoder is not None:
+                self._ingest_hybrid_transactional(chunks, collection_name)
+            else:
+                self._ingest_dense_only_transactional(chunks, collection_name)
+
+            # Phase 3: Commit transaction after successful Qdrant insertion
+            print(f"Phase 3: Committing transaction...")
+            if not txn.commit():
+                raise RuntimeError("Failed to commit ingestion transaction")
+
+        # Update main registry for each file with chunk IDs (after successful commit)
         for source_path, source_chunks in chunks_by_source.items():
             if source_chunks:
                 first_chunk = source_chunks[0]
-                # Collect chunk IDs from metadata (set by _ingest_hybrid or _ingest_dense_only)
                 chunk_ids = [c.metadata.get('chunk_id') for c in source_chunks if c.metadata.get('chunk_id')]
                 self.registry.update_file(
                     file_path=source_path,
@@ -1036,7 +1503,118 @@ class DocumentIngestionPipeline:
                     chunk_ids=chunk_ids if chunk_ids else None,
                 )
 
-        print(f"Successfully ingested {len(chunks)} chunks and updated registry")
+        print(f"Successfully ingested {len(chunks)} chunks with transactional consistency")
+
+    def _ingest_hybrid_transactional(self, chunks: List[Document], collection_name: str, batch_size: int = 100):
+        """Ingest documents with both dense and sparse vectors (transactional version).
+
+        Assumes chunk IDs are already assigned in metadata (by _ingest_chunks_with_registry).
+        """
+        self._ensure_hybrid_collection(collection_name)
+
+        print(f"Generating embeddings for {len(chunks)} chunks...")
+
+        # Process in batches
+        total_points = 0
+        for i in tqdm(range(0, len(chunks), batch_size), desc="Ingesting batches"):
+            batch = chunks[i:i + batch_size]
+            texts = [doc.page_content for doc in batch]
+
+            # Generate dense embeddings
+            dense_embeddings = self.embeddings.embed_documents(texts)
+
+            # Generate sparse embeddings
+            sparse_embeddings = list(self.sparse_encoder.embed(texts))
+
+            # Create points with both vector types
+            points = []
+            for doc, dense_vec, sparse_vec in zip(batch, dense_embeddings, sparse_embeddings):
+                # Use pre-assigned deterministic UUID from metadata
+                point_id = doc.metadata['chunk_id']
+
+                # Build payload from document metadata
+                payload = {
+                    'page_content': doc.page_content,
+                    'source': doc.metadata.get('source', 'Unknown'),
+                    'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    'chunk_id': point_id,
+                    'chunk_index': doc.metadata.get('chunk_index', 0),
+                    **{k: v for k, v in doc.metadata.items()
+                       if k not in ('page_content', 'source', 'source_type', 'chunk_id', 'chunk_index')}
+                }
+
+                point = PointStruct(
+                    id=point_id,
+                    vector={
+                        DENSE_VECTOR_NAME: dense_vec,
+                        SPARSE_VECTOR_NAME: QdrantSparseVector(
+                            indices=sparse_vec.indices.tolist(),
+                            values=sparse_vec.values.tolist(),
+                        )
+                    },
+                    payload=payload,
+                )
+                points.append(point)
+
+            # Upsert batch
+            self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+            total_points += len(batch)
+
+        print(f"Inserted {total_points} chunks with hybrid vectors")
+
+    def _ingest_dense_only_transactional(self, chunks: List[Document], collection_name: str, batch_size: int = 100):
+        """Ingest documents with dense vectors only (transactional version).
+
+        Assumes chunk IDs are already assigned in metadata (by _ingest_chunks_with_registry).
+        """
+        self._ensure_dense_collection(collection_name)
+
+        print(f"Generating embeddings for {len(chunks)} chunks...")
+
+        # Process in batches
+        total_points = 0
+        for i in tqdm(range(0, len(chunks), batch_size), desc="Ingesting batches"):
+            batch = chunks[i:i + batch_size]
+            texts = [doc.page_content for doc in batch]
+
+            # Generate dense embeddings
+            dense_embeddings = self.embeddings.embed_documents(texts)
+
+            # Create points with dense vectors
+            points = []
+            for doc, dense_vec in zip(batch, dense_embeddings):
+                # Use pre-assigned deterministic UUID from metadata
+                point_id = doc.metadata['chunk_id']
+
+                # Build payload from document metadata
+                payload = {
+                    'page_content': doc.page_content,
+                    'source': doc.metadata.get('source', 'Unknown'),
+                    'source_type': doc.metadata.get('source_type', 'Unknown'),
+                    'chunk_id': point_id,
+                    'chunk_index': doc.metadata.get('chunk_index', 0),
+                    **{k: v for k, v in doc.metadata.items()
+                       if k not in ('page_content', 'source', 'source_type', 'chunk_id', 'chunk_index')}
+                }
+
+                point = PointStruct(
+                    id=point_id,
+                    vector=dense_vec,
+                    payload=payload,
+                )
+                points.append(point)
+
+            # Upsert batch
+            self.client.upsert(
+                collection_name=collection_name,
+                points=points,
+            )
+            total_points += len(batch)
+
+        print(f"Inserted {total_points} chunks with dense vectors")
 
 
 def ingest_single_file(
@@ -1119,10 +1697,21 @@ Examples:
   python ingest_docs.py --no-dedup           # Disable chunk deduplication
   python ingest_docs.py --fuzzy-dedup        # Enable fuzzy near-duplicate removal
   python ingest_docs.py --fuzzy-dedup --fuzzy-threshold 0.9  # Custom threshold
+  python ingest_docs.py --cleanup-orphans    # Clean up orphaned staging entries
+  python ingest_docs.py --staging-stats      # Show staging table statistics
 
 Note: This script uses idempotent content-based UUIDs. Re-running ingestion
 will update existing vectors instead of creating duplicates. Safe to run
 'make ingest' multiple times.
+
+Transactional Consistency:
+This script uses two-phase commit between the registry and Qdrant to prevent
+orphaned chunks. Chunks are staged in SQLite before Qdrant insertion, and
+only marked as committed after successful upsert. On failure, automatic
+rollback removes any partially inserted chunks from Qdrant.
+
+Run --cleanup-orphans periodically or on startup to clean up entries from
+transactions that failed without proper rollback (e.g., process crash).
 
 Deduplication removes duplicate chunks BEFORE embedding, saving compute costs
 and improving search quality. Exact deduplication is enabled by default.
@@ -1189,6 +1778,25 @@ Fuzzy deduplication can catch near-duplicates with minor differences.
         type=float,
         default=0.95,
         help='Similarity threshold for fuzzy deduplication (0.0-1.0, default: 0.95)'
+    )
+
+    parser.add_argument(
+        '--cleanup-orphans',
+        action='store_true',
+        help='Clean up orphaned staging entries from failed transactions'
+    )
+
+    parser.add_argument(
+        '--staging-stats',
+        action='store_true',
+        help='Show staging table statistics (for transaction debugging)'
+    )
+
+    parser.add_argument(
+        '--orphan-max-age',
+        type=int,
+        default=24,
+        help='Maximum age in hours for staged entries before cleanup (default: 24)'
     )
 
     return parser.parse_args()
@@ -1264,6 +1872,69 @@ def main():
             print("\nNo duplicates found. Collection is clean.")
         return
 
+    # Handle staging stats mode
+    if args.staging_stats:
+        print("Staging Table Statistics")
+        print(f"{'='*60}")
+
+        stats = IngestionTransaction.get_staging_stats(registry)
+
+        if 'error' in stats:
+            print(f"Error: {stats['error']}")
+            return
+
+        print(f"Total entries: {stats['total_entries']}")
+        print(f"Total transactions: {stats['total_transactions']}")
+        print()
+        print("By status:")
+        for status, count in stats.get('by_status', {}).items():
+            print(f"  {status}: {count}")
+        print()
+        print(f"Staged (pending): {stats['staged_count']}")
+        print(f"Committed: {stats['committed_count']}")
+        print(f"Rolled back: {stats['rolled_back_count']}")
+
+        if stats.get('oldest_staged'):
+            print(f"\nOldest pending staged entry: {stats['oldest_staged']}")
+            print("Consider running --cleanup-orphans if these are old entries")
+        else:
+            print("\nNo pending staged entries")
+        return
+
+    # Handle orphan cleanup mode
+    if args.cleanup_orphans:
+        print("Cleaning up orphaned staging entries...")
+        print(f"{'='*60}")
+        print(f"Qdrant: {QDRANT_HOST}:{QDRANT_PORT}")
+        print(f"Collection: {COLLECTION_NAME}")
+        print(f"Max age for orphans: {args.orphan_max_age} hours")
+        print()
+
+        # Create Qdrant client
+        client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+        # Run cleanup
+        cleanup_stats = IngestionTransaction.cleanup_orphaned_entries(
+            registry=registry,
+            qdrant_client=client,
+            collection_name=COLLECTION_NAME,
+            max_age_hours=args.orphan_max_age,
+        )
+
+        print(f"{'='*60}")
+        print("CLEANUP RESULTS")
+        print(f"{'='*60}")
+        print(f"Orphaned staged entries found: {cleanup_stats['orphaned_staged']}")
+        print(f"Entries rolled back: {cleanup_stats['rolled_back']}")
+        print(f"Chunks deleted from Qdrant: {cleanup_stats['deleted_from_qdrant']}")
+        print(f"Old committed/rolled_back entries cleaned: {cleanup_stats['cleaned_committed']}")
+
+        if cleanup_stats['orphaned_staged'] > 0:
+            print("\nOrphaned entries have been cleaned up.")
+        else:
+            print("\nNo orphaned entries found. System is clean.")
+        return
+
     # Determine chunking mode
     use_semantic = CHUNKING_MODE.lower() == "semantic" and not args.legacy_chunking
 
@@ -1280,6 +1951,7 @@ def main():
     print(f"Hybrid search: {'enabled' if HYBRID_SEARCH_ENABLED else 'disabled'}")
     print(f"Incremental mode: {'disabled (--full)' if args.full else 'enabled'}")
     print(f"Idempotent UUIDs: enabled (content-based deterministic IDs)")
+    print(f"Transactional consistency: enabled (two-phase commit with rollback)")
 
     # Deduplication status
     if enable_dedup:

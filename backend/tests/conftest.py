@@ -231,6 +231,133 @@ mock_feedback_module = MagicMock()
 mock_feedback_module.feedback_log = MagicMock()
 mock_feedback_module.get_feedback_summary = MagicMock(return_value={})
 
+# Create mock redis_client module - shared Redis connection pools
+mock_redis_pool = MagicMock()
+mock_redis_pool.max_connections = 10
+mock_redis_pool._in_use_connections = set()
+mock_redis_pool._available_connections = []
+
+mock_redis_client_obj = MagicMock()
+mock_redis_client_obj.ping.return_value = True
+mock_redis_client_obj.lrange.return_value = []
+mock_redis_client_obj.pipeline.return_value = MagicMock()
+mock_redis_client_obj.get.return_value = None
+mock_redis_client_obj.set.return_value = True
+mock_redis_client_obj.delete.return_value = 1
+
+mock_redis_client_module = MagicMock()
+mock_redis_client_module.get_redis_pool = MagicMock(return_value=mock_redis_pool)
+mock_redis_client_module.get_redis_string_pool = MagicMock(return_value=mock_redis_pool)
+mock_redis_client_module.get_redis_client = MagicMock(return_value=mock_redis_client_obj)
+mock_redis_client_module.get_redis_string_client = MagicMock(return_value=mock_redis_client_obj)
+mock_redis_client_module.is_redis_connected = MagicMock(return_value=True)
+mock_redis_client_module.close_redis_pool = MagicMock()
+mock_redis_client_module.close_async_redis_pool = AsyncMock()
+mock_redis_client_module.get_redis_pool_stats = MagicMock(return_value={
+    "host": "localhost",
+    "port": 6379,
+    "db": 0,
+    "max_connections": 10,
+    "current_connections": 0,
+    "available_connections": 5,
+    "bytes_pool": {"current_connections": 0, "available_connections": 2},
+    "string_pool": {"current_connections": 0, "available_connections": 3},
+    "async_pool": {"status": "not_initialized"},
+})
+
+# Create mock drift_detection module
+mock_drift_status = MagicMock()
+mock_drift_status.STABLE = "stable"
+mock_drift_status.WARNING = "warning"
+mock_drift_status.DRIFT_DETECTED = "drift_detected"
+mock_drift_status.INSUFFICIENT_DATA = "insufficient_data"
+mock_drift_status.NO_BASELINE = "no_baseline"
+
+mock_drift_detector = MagicMock()
+mock_drift_detector.record_score = MagicMock()
+mock_drift_detector.check_drift = AsyncMock(return_value={
+    "status": "stable",
+    "message": "Distribution stable",
+    "checked_at": "2026-01-12T00:00:00Z",
+})
+mock_drift_detector.set_baseline = AsyncMock(return_value=True)
+mock_drift_detector.get_status = MagicMock(return_value={
+    "scores_recorded": 0,
+    "has_baseline": False,
+})
+mock_drift_detector.get_history = AsyncMock(return_value=[])
+mock_drift_detector.reset = AsyncMock()
+
+mock_drift_detection_module = MagicMock()
+mock_drift_detection_module.drift_detector = mock_drift_detector
+mock_drift_detection_module.DriftStatus = mock_drift_status
+mock_drift_detection_module.DriftDetector = MagicMock()
+mock_drift_detection_module.DriftMetrics = MagicMock()
+
+# Create mock circuit_breaker module
+# Need to return plain dict values, not MagicMock, for Pydantic validation
+mock_circuit_breaker_module = MagicMock()
+
+# Create proper mock status dict matching CircuitBreaker.get_status() return format
+def _make_mock_breaker_status(name: str) -> dict:
+    return {
+        "name": name,
+        "state": "closed",
+        "config": {
+            "failure_threshold": 5,
+            "success_threshold": 2,
+            "reset_timeout_seconds": 30.0,
+            "retry_attempts": 3,
+        },
+        "stats": {
+            "total_calls": 0,
+            "successful_calls": 0,
+            "failed_calls": 0,
+            "rejected_calls": 0,
+            "success_rate": None,
+        },
+        "time_until_retry": None,
+    }
+
+mock_circuit_breaker_module.get_circuit_breaker_states = MagicMock(return_value={
+    "ollama": _make_mock_breaker_status("ollama"),
+    "qdrant": _make_mock_breaker_status("qdrant"),
+    "tavily": _make_mock_breaker_status("tavily"),
+})
+mock_circuit_breaker_module.get_circuit_breakers_healthy = MagicMock(return_value=True)
+mock_circuit_breaker_module.reset_all_circuit_breakers = MagicMock()
+mock_circuit_breaker_module.CircuitBreaker = MagicMock()
+mock_circuit_breaker_module.CircuitBreakerOpen = MagicMock()
+
+# Create mock analytics module
+mock_metrics_collector = MagicMock()
+mock_metrics_collector.record_request = MagicMock()
+mock_metrics_collector.record_error = MagicMock()
+mock_metrics_collector.get_realtime_analytics = MagicMock(return_value={
+    "requests_per_minute": 0,
+    "avg_latency_ms": 0,
+    "error_rate": 0,
+})
+
+mock_analytics_module = MagicMock()
+mock_analytics_module.get_metrics_collector = MagicMock(return_value=mock_metrics_collector)
+mock_analytics_module.MetricsCollector = MagicMock(return_value=mock_metrics_collector)
+
+# Create mock device_utils module
+mock_device_utils_module = MagicMock()
+mock_device_utils_module.get_optimal_device = MagicMock(return_value="cpu")
+mock_device_utils_module.get_device_info = MagicMock(return_value={
+    "pytorch_available": True,
+    "cuda_available": False,
+    "mps_available": False,
+    "recommended_device": "cpu",
+    "current_embedding_device": "cpu",
+    "current_reranker_device": "cpu",
+})
+mock_device_utils_module.log_device_configuration = MagicMock()
+mock_device_utils_module.get_actual_embedding_device = MagicMock(return_value="cpu")
+mock_device_utils_module.get_actual_reranker_device = MagicMock(return_value="cpu")
+
 # Inject mocked modules into sys.modules BEFORE any app imports
 # This prevents the real modules from being imported and connecting to services
 sys.modules['app.vectorstore'] = mock_vectorstore_module
@@ -243,6 +370,12 @@ sys.modules['app.database'] = mock_database_module
 sys.modules['app.db_models'] = mock_db_models_module
 sys.modules['app.auth'] = mock_auth_module
 sys.modules['app.feedback'] = mock_feedback_module
+sys.modules['app.redis_client'] = mock_redis_client_module
+sys.modules['app.drift_detection'] = mock_drift_detection_module
+sys.modules['app.circuit_breaker'] = mock_circuit_breaker_module
+# NOTE: app.analytics is NOT mocked - it doesn't depend on external services
+# and test_analytics.py tests the real implementation
+sys.modules['app.device_utils'] = mock_device_utils_module
 
 # =============================================================================
 # Now safe to import pytest and define fixtures

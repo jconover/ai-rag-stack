@@ -80,7 +80,7 @@ class ComponentStatus(BaseModel):
 
 
 class RedisPoolStats(BaseModel):
-    """Redis connection pool statistics"""
+    """Redis connection pool statistics (verbose mode - contains sensitive info)"""
     max_connections: int = Field(..., description="Maximum pool connections configured")
     current_connections: Optional[int] = Field(None, description="Connections currently in use")
     available_connections: Optional[int] = Field(None, description="Connections available in pool")
@@ -89,8 +89,15 @@ class RedisPoolStats(BaseModel):
     db: Optional[int] = Field(None, description="Redis database number")
 
 
+class RedisPoolStatsSafe(BaseModel):
+    """Redis connection pool statistics (safe mode - no sensitive info)"""
+    max_connections: int = Field(..., description="Maximum pool connections configured")
+    current_connections: Optional[int] = Field(None, description="Connections currently in use")
+    available_connections: Optional[int] = Field(None, description="Connections available in pool")
+
+
 class PostgresPoolStats(BaseModel):
-    """PostgreSQL connection pool statistics"""
+    """PostgreSQL connection pool statistics (verbose mode - contains sensitive info)"""
     host: Optional[str] = Field(None, description="PostgreSQL host")
     port: Optional[int] = Field(None, description="PostgreSQL port")
     database: Optional[str] = Field(None, description="Database name")
@@ -100,6 +107,15 @@ class PostgresPoolStats(BaseModel):
     checked_out: Optional[int] = Field(None, description="Connections currently in use")
     overflow: Optional[int] = Field(None, description="Current overflow connections")
     pool_timeout: Optional[float] = Field(None, description="Pool connection timeout in seconds")
+
+
+class PostgresPoolStatsSafe(BaseModel):
+    """PostgreSQL connection pool statistics (safe mode - no sensitive info)"""
+    pool_size: int = Field(..., description="Configured pool size")
+    max_overflow: int = Field(..., description="Maximum overflow connections")
+    checked_in: Optional[int] = Field(None, description="Connections available in pool")
+    checked_out: Optional[int] = Field(None, description="Connections currently in use")
+    overflow: Optional[int] = Field(None, description="Current overflow connections")
 
 
 class CircuitBreakerStatus(BaseModel):
@@ -135,6 +151,7 @@ class DeviceInfo(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Health response with full details (verbose mode - contains sensitive info)"""
     status: str
     ollama_connected: bool
     qdrant_connected: bool
@@ -148,6 +165,23 @@ class HealthResponse(BaseModel):
     postgres_pool: Optional[PostgresPoolStats] = Field(None, description="PostgreSQL connection pool statistics")
     circuit_breakers: Optional[CircuitBreakersStatus] = Field(None, description="Circuit breaker status for resilience")
     components: Optional[Dict[str, ComponentStatus]] = Field(None, description="Detailed component status")
+
+
+class ServiceStatus(BaseModel):
+    """Safe service status without internal details"""
+    status: str = Field(..., description="Service status: connected, disconnected, degraded")
+    models_available: Optional[int] = Field(None, description="Number of models available (for Ollama)")
+    points_count: Optional[int] = Field(None, description="Number of indexed vectors (for Qdrant)")
+    pool_utilization: Optional[float] = Field(None, description="Connection pool utilization percentage")
+
+
+class HealthResponseSafe(BaseModel):
+    """Health response without sensitive internal details (safe for production)"""
+    status: str = Field(..., description="Overall health status: healthy, degraded, unhealthy")
+    services: Dict[str, ServiceStatus] = Field(..., description="Individual service status")
+    reranker: Optional[Dict[str, Any]] = Field(None, description="Reranker status (enabled/loaded)")
+    device_info: Optional[DeviceInfo] = Field(None, description="ML device info (no sensitive data)")
+    circuit_breakers: Optional[Dict[str, str]] = Field(None, description="Circuit breaker states (state only)")
 
 
 class ModelInfo(BaseModel):
@@ -610,3 +644,70 @@ class RealtimeAnalyticsResponse(BaseModel):
     retrieval_quality: RetrievalQualityMetrics = Field(..., description="Retrieval similarity score metrics")
     model_usage: Dict[str, ModelUsageStats] = Field(default_factory=dict, description="Model usage distribution")
     top_queries: List[TopQueryEntry] = Field(default_factory=list, description="Top queries (anonymized, last hour)")
+
+
+# =====================
+# Model Drift Detection Models
+# =====================
+
+class DriftMetricsResponse(BaseModel):
+    """Statistical metrics for a score distribution window"""
+    mean_score: float = Field(..., description="Mean similarity score")
+    std_score: float = Field(..., description="Standard deviation of scores")
+    p25: float = Field(..., description="25th percentile score")
+    p50: float = Field(..., description="50th percentile (median) score")
+    p75: float = Field(..., description="75th percentile score")
+    min_score: float = Field(..., description="Minimum score in window")
+    max_score: float = Field(..., description="Maximum score in window")
+    sample_count: int = Field(..., description="Number of samples in window")
+    timestamp: str = Field(..., description="When metrics were computed (ISO format)")
+
+
+class DriftCheckResponse(BaseModel):
+    """Response from drift detection check"""
+    status: str = Field(
+        ...,
+        description="Drift status: stable, drift_detected, warning, insufficient_data, no_baseline, error"
+    )
+    message: str = Field(..., description="Human-readable status message")
+    checked_at: str = Field(..., description="When check was performed (ISO format)")
+    mean_shift_pct: Optional[float] = Field(None, description="Percentage shift in mean score from baseline")
+    std_shift_pct: Optional[float] = Field(None, description="Percentage shift in standard deviation")
+    median_shift_pct: Optional[float] = Field(None, description="Percentage shift in median score")
+    current: Optional[DriftMetricsResponse] = Field(None, description="Current window metrics")
+    baseline: Optional[DriftMetricsResponse] = Field(None, description="Baseline metrics for comparison")
+
+
+class DriftStatusResponse(BaseModel):
+    """Drift detector configuration and status"""
+    enabled: bool = Field(True, description="Whether drift detection is enabled")
+    window_hours: int = Field(..., description="Time window for collecting scores (hours)")
+    drift_threshold_pct: float = Field(..., description="Threshold to trigger drift alert (percentage)")
+    warning_threshold_pct: float = Field(..., description="Threshold to trigger warning (percentage)")
+    min_samples_required: int = Field(..., description="Minimum samples needed for valid metrics")
+    current_sample_count: int = Field(..., description="Current number of samples in buffer")
+    buffer_size: int = Field(..., description="In-memory buffer size")
+    redis_connected: bool = Field(..., description="Whether Redis is available for storage")
+
+
+class DriftHistoryEntry(BaseModel):
+    """Daily drift metrics history entry"""
+    date: str = Field(..., description="Date (YYYY-MM-DD)")
+    mean_score: float = Field(..., description="Average mean score for the day")
+    std_score: float = Field(..., description="Average standard deviation for the day")
+    total_samples: int = Field(..., description="Total samples collected that day")
+    measurement_count: int = Field(..., description="Number of metric measurements that day")
+
+
+class DriftHistoryResponse(BaseModel):
+    """Response with drift metrics history"""
+    history: List[DriftHistoryEntry] = Field(..., description="Daily metrics history")
+    days_requested: int = Field(..., description="Number of days requested")
+    days_returned: int = Field(..., description="Number of days with data")
+
+
+class SetBaselineResponse(BaseModel):
+    """Response after setting drift baseline"""
+    success: bool = Field(..., description="Whether baseline was set successfully")
+    message: str = Field(..., description="Status message")
+    baseline: Optional[DriftMetricsResponse] = Field(None, description="The baseline metrics that were set")
