@@ -20,6 +20,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import json
+import ollama
 
 from app.config import settings
 from app.redis_client import (
@@ -247,6 +248,22 @@ limiter = Limiter(key_func=get_remote_address)
 # Maximum query length to prevent OOM in embedding/LLM
 MAX_QUERY_LENGTH = 8000
 
+
+async def warmup_ollama_model():
+    """Preload default model into GPU memory on startup."""
+    model = settings.ollama_default_model
+    logger.info(f"Warming up Ollama model: {model}")
+    try:
+        ollama.chat(
+            model=model,
+            messages=[{"role": "user", "content": "warmup"}],
+            options={"num_predict": 1}
+        )
+        logger.info(f"Model {model} warmed up successfully")
+    except Exception as e:
+        logger.warning(f"Model warmup failed (non-fatal): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
@@ -276,6 +293,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize PostgreSQL: {e}")
         # Continue without PostgreSQL - degrade gracefully
+
+    # Preload default Ollama model into GPU memory to eliminate first-request latency
+    await warmup_ollama_model()
 
     yield
 

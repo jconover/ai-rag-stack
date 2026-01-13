@@ -424,6 +424,11 @@ class VectorStore:
     # BGE models benefit from query instruction prefix for better retrieval
     BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
+    # Class-level cache for collection capabilities (sparse vector support, etc.)
+    # This avoids repeated get_collection() calls during hybrid search
+    _collection_capabilities_cache: Dict[str, Tuple[dict, float]] = {}
+    _collection_capabilities_ttl: int = 300  # 5 minutes
+
     def __init__(self):
         # Use gRPC for better performance (lower latency, higher throughput)
         # gRPC provides ~30% lower latency and higher throughput than REST
@@ -440,6 +445,50 @@ class VectorStore:
         self.collection_name = settings.qdrant_collection_name
         self._ensure_collection()
         self._ensure_payload_indexes()
+
+    def _get_cached_collection_capabilities(self, collection_name: str) -> dict:
+        """Get cached collection capabilities (sparse vector support, etc.).
+
+        Caches the result of get_collection() to avoid repeated API calls
+        during hybrid search. The cache has a configurable TTL (default 5 minutes).
+
+        This optimization is particularly important for hybrid search where we need
+        to check if the collection supports sparse vectors before executing the
+        sparse search branch.
+
+        Args:
+            collection_name: Name of the collection to check
+
+        Returns:
+            Dictionary with capability flags:
+            - has_sparse: bool indicating if collection has sparse vector support
+        """
+        import time
+        cache_key = collection_name
+        now = time.time()
+
+        # Check cache
+        if cache_key in self._collection_capabilities_cache:
+            cached, timestamp = self._collection_capabilities_cache[cache_key]
+            if now - timestamp < self._collection_capabilities_ttl:
+                return cached
+
+        # Fetch and cache
+        try:
+            collection_info = self.client.get_collection(collection_name)
+            has_sparse = False
+            if hasattr(collection_info.config, 'params'):
+                params = collection_info.config.params
+                if hasattr(params, 'sparse_vectors') and params.sparse_vectors:
+                    has_sparse = self.SPARSE_VECTOR_NAME in params.sparse_vectors
+
+            capabilities = {"has_sparse": has_sparse}
+            self._collection_capabilities_cache[cache_key] = (capabilities, now)
+            logger.debug(f"Cached collection capabilities for '{collection_name}': {capabilities}")
+            return capabilities
+        except Exception as e:
+            logger.warning(f"Failed to get collection capabilities: {e}")
+            return {"has_sparse": False}
 
     def _preprocess_query(self, query: str) -> str:
         """
@@ -1078,22 +1127,13 @@ class VectorStore:
             dense_results = []
 
         # Execute sparse search with circuit breaker
+        # Use cached collection capabilities to avoid repeated get_collection() calls
         sparse_results = []
-        try:
-            # Check if collection supports sparse vectors
-            def _get_collection_info():
-                return self.client.get_collection(self.collection_name)
+        capabilities = self._get_cached_collection_capabilities(self.collection_name)
+        has_sparse = capabilities.get("has_sparse", False)
 
-            collection_info = qdrant_circuit_breaker.call(_get_collection_info)
-            has_sparse = False
-
-            # Check for sparse vectors in collection config
-            if hasattr(collection_info.config, 'params'):
-                params = collection_info.config.params
-                if hasattr(params, 'sparse_vectors') and params.sparse_vectors:
-                    has_sparse = self.SPARSE_VECTOR_NAME in params.sparse_vectors
-
-            if has_sparse and sparse_vector.indices:
+        if has_sparse and sparse_vector.indices:
+            try:
                 def _execute_sparse_search():
                     return self.client.search(
                         collection_name=self.collection_name,
@@ -1110,12 +1150,12 @@ class VectorStore:
                     )
 
                 sparse_results = qdrant_circuit_breaker.call(_execute_sparse_search)
-            else:
-                logger.debug("Collection doesn't support sparse vectors, using dense only")
-        except CircuitBreakerOpen as e:
-            logger.warning(f"Qdrant circuit breaker open for sparse search: {e}")
-        except Exception as e:
-            logger.warning(f"Sparse search failed: {e}, using dense results only")
+            except CircuitBreakerOpen as e:
+                logger.warning(f"Qdrant circuit breaker open for sparse search: {e}")
+            except Exception as e:
+                logger.warning(f"Sparse search failed: {e}, using dense results only")
+        else:
+            logger.debug("Collection doesn't support sparse vectors, using dense only")
 
         # If no sparse results, return dense results only
         if not sparse_results:
@@ -1143,6 +1183,196 @@ class VectorStore:
 
         logger.debug(
             f"Hybrid search: {len(dense_docs_scores)} dense, {len(sparse_docs_scores)} sparse, "
+            f"{len(filtered_results)} fused results"
+        )
+
+        return filtered_results, embedding_result.cache_hit
+
+    async def hybrid_search_with_cache_info_async(
+        self,
+        query: str,
+        top_k: int = None,
+        min_score: float = None,
+        source_type: str = None,
+        source: str = None,
+        alpha: float = None,
+    ) -> Tuple[List[Tuple[Document, float]], bool]:
+        """
+        Async hybrid search with parallelized dense and sparse searches.
+
+        This is the optimized async version that runs dense and sparse searches
+        concurrently using asyncio.gather(), providing significant latency
+        reduction compared to the sequential sync version.
+
+        Performance improvement:
+        - Old (sequential): dense_search() -> check_collection_info() -> sparse_search() -> fusion()
+        - New (parallel): check_cached_capabilities() -> parallel(dense_search(), sparse_search()) -> fusion()
+
+        The collection capabilities are checked using a cached lookup (TTL 5 minutes)
+        to avoid repeated get_collection() API calls.
+
+        Args:
+            query: Search query string
+            top_k: Maximum number of results
+            min_score: Minimum similarity score threshold (0-1)
+            source_type: Filter by document source type
+            source: Filter by specific source document path
+            alpha: Weight for dense vs sparse (0=sparse only, 1=dense only)
+
+        Returns:
+            Tuple of (List of (Document, score) tuples, embedding_cache_hit boolean)
+        """
+        import asyncio
+
+        if top_k is None:
+            top_k = settings.top_k_results
+        if min_score is None:
+            min_score = settings.min_similarity_score
+        if alpha is None:
+            alpha = settings.hybrid_search_alpha
+
+        # Check if hybrid search should be used
+        sparse_encoder = _get_sparse_encoder()
+        if not settings.hybrid_search_enabled or sparse_encoder is None:
+            logger.debug("Hybrid search disabled, falling back to dense-only")
+            return self.search_with_cache_info(
+                query=query,
+                top_k=top_k,
+                min_score=min_score,
+                source_type=source_type,
+                source=source,
+            )
+
+        # Check collection capabilities using cached lookup (avoids API call per query)
+        capabilities = self._get_cached_collection_capabilities(self.collection_name)
+        has_sparse = capabilities.get("has_sparse", False)
+
+        # Preprocess query for both dense and sparse encoding
+        processed_query = self._preprocess_query(query)
+
+        # Generate dense embedding with caching
+        embedding_result = self._embed_query_cached(query)
+        query_vector = embedding_result.vector
+
+        # Generate sparse embedding using preprocessed query
+        sparse_vector = None
+        if has_sparse:
+            try:
+                sparse_vector = sparse_encoder.encode_query(processed_query)
+            except Exception as e:
+                logger.warning(f"Sparse encoding failed: {e}, falling back to dense-only")
+
+        # If no sparse support or encoding failed, use dense only
+        if not has_sparse or sparse_vector is None or not sparse_vector.indices:
+            logger.debug("Collection doesn't support sparse vectors or sparse encoding failed, using dense only")
+            results = self.search_with_scores(
+                query=query,
+                top_k=top_k,
+                min_score=min_score,
+                source_type=source_type,
+                source=source,
+            )
+            return results, embedding_result.cache_hit
+
+        # Build filter conditions
+        query_filter = self._build_filter(source_type=source_type, source=source)
+
+        # Get optimized search parameters
+        search_params = self._get_search_params()
+
+        # Fetch more results than needed for RRF fusion
+        fetch_limit = min(top_k * 4, 100)
+
+        # Define async wrappers for the synchronous Qdrant client calls
+        # These run the blocking calls in the default thread pool executor
+        loop = asyncio.get_event_loop()
+
+        async def _async_dense_search():
+            """Execute dense search in thread pool."""
+            def _execute():
+                try:
+                    return qdrant_circuit_breaker.call(
+                        lambda: self.client.search(
+                            collection_name=self.collection_name,
+                            query_vector=NamedVector(
+                                name=self.DENSE_VECTOR_NAME,
+                                vector=query_vector,
+                            ),
+                            limit=fetch_limit,
+                            query_filter=query_filter,
+                            search_params=search_params,
+                            with_payload=True,
+                        )
+                    )
+                except CircuitBreakerOpen as e:
+                    logger.warning(f"Qdrant circuit breaker open for dense search: {e}")
+                    return []
+                except Exception as e:
+                    logger.error(f"Dense search failed: {e}")
+                    return []
+
+            return await loop.run_in_executor(None, _execute)
+
+        async def _async_sparse_search():
+            """Execute sparse search in thread pool."""
+            def _execute():
+                try:
+                    return qdrant_circuit_breaker.call(
+                        lambda: self.client.search(
+                            collection_name=self.collection_name,
+                            query_vector=NamedSparseVector(
+                                name=self.SPARSE_VECTOR_NAME,
+                                vector=QdrantSparseVector(
+                                    indices=sparse_vector.indices,
+                                    values=sparse_vector.values,
+                                )
+                            ),
+                            limit=fetch_limit,
+                            query_filter=query_filter,
+                            with_payload=True,
+                        )
+                    )
+                except CircuitBreakerOpen as e:
+                    logger.warning(f"Qdrant circuit breaker open for sparse search: {e}")
+                    return []
+                except Exception as e:
+                    logger.warning(f"Sparse search failed: {e}")
+                    return []
+
+            return await loop.run_in_executor(None, _execute)
+
+        # Execute dense and sparse searches in parallel
+        dense_results, sparse_results = await asyncio.gather(
+            _async_dense_search(),
+            _async_sparse_search(),
+        )
+
+        # If no sparse results, return dense results only
+        if not sparse_results:
+            return self._process_search_results(dense_results, min_score, top_k), embedding_result.cache_hit
+
+        # Convert results to (Document, score) format for RRF
+        dense_docs_scores = self._process_search_results(dense_results, 0.0, fetch_limit)
+        sparse_docs_scores = self._process_search_results(sparse_results, 0.0, fetch_limit)
+
+        # Apply Reciprocal Rank Fusion
+        from app.sparse_encoder import reciprocal_rank_fusion
+
+        fused_results = reciprocal_rank_fusion(
+            dense_results=dense_docs_scores,
+            sparse_results=sparse_docs_scores,
+            k=settings.hybrid_rrf_k,
+            alpha=alpha,
+        )
+
+        # Apply minimum score threshold and limit
+        filtered_results = [
+            (doc, score) for doc, score in fused_results
+            if score >= min_score * 0.01  # RRF scores are much smaller
+        ][:top_k]
+
+        logger.debug(
+            f"Async hybrid search: {len(dense_docs_scores)} dense, {len(sparse_docs_scores)} sparse, "
             f"{len(filtered_results)} fused results"
         )
 

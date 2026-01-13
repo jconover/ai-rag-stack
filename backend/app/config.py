@@ -1,6 +1,21 @@
 """Configuration management"""
 import os
+import warnings
 from pydantic_settings import BaseSettings
+
+
+# List of known weak/default passwords that should not be used in production
+WEAK_PASSWORDS = [
+    "postgres",
+    "ragpassword",
+    "password",
+    "admin",
+    "devops_password",
+    "CHANGE_ME_TO_SECURE_PASSWORD",
+    "123456",
+    "root",
+    "secret",
+]
 
 
 class Settings(BaseSettings):
@@ -183,4 +198,35 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 
+def validate_security_settings(settings_obj: Settings) -> None:
+    """
+    Validate that default/weak passwords are not being used.
+
+    Emits warnings for insecure configurations rather than raising exceptions,
+    so development environments can still function while alerting users to
+    security concerns.
+    """
+    # Check PostgreSQL password
+    if settings_obj.postgres_password in WEAK_PASSWORDS:
+        warnings.warn(
+            "SECURITY WARNING: Default or weak PostgreSQL password detected. "
+            f"Password '{settings_obj.postgres_password}' is not secure. "
+            "Set POSTGRES_PASSWORD to a secure value in production.",
+            UserWarning,
+            stacklevel=2
+        )
+
+    # Check for empty or very short passwords
+    if len(settings_obj.postgres_password) < 8:
+        warnings.warn(
+            "SECURITY WARNING: PostgreSQL password is too short (< 8 characters). "
+            "Use a longer password in production.",
+            UserWarning,
+            stacklevel=2
+        )
+
+
 settings = Settings()
+
+# Validate security settings on module load
+validate_security_settings(settings)

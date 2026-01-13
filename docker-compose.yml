@@ -11,9 +11,11 @@ services:
       - OLLAMA_NUM_GPU=1
       - OLLAMA_GPU_LAYERS=999
       - OLLAMA_NUM_THREAD=16
-      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_MAX_LOADED_MODELS=1          # Single model = more VRAM for context
       - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_NUM_PARALLEL=8               # Better batching for concurrent requests
+      - OLLAMA_FLASH_ATTENTION=1            # Enable flash attention for faster inference
+      - OLLAMA_KV_CACHE_TYPE=q8_0           # Quantized KV cache saves ~50% VRAM
     runtime: nvidia
     restart: unless-stopped
     healthcheck:

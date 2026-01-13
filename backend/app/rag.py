@@ -15,6 +15,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+import hashlib
 from typing import List, Optional, Dict, Any, Tuple
 import ollama
 
@@ -36,6 +37,48 @@ from app.tracing import get_tracer, create_span, SpanAttributes
 from app.drift_detection import drift_detector
 
 logger = logging.getLogger(__name__)
+
+
+# Model-specific context window limits (tokens)
+# Using ~75% of actual limit to leave room for response generation
+MODEL_CONTEXT_LIMITS = {
+    "llama3.1": 96000,      # 128K context * 0.75
+    "llama3.2": 96000,      # 128K context * 0.75
+    "llama3": 6144,         # 8K context * 0.75
+    "mistral": 24576,       # 32K context * 0.75
+    "mixtral": 24576,       # 32K context * 0.75
+    "qwen2.5": 24576,       # 32K context * 0.75
+    "qwen2.5-coder": 24576, # 32K context * 0.75
+    "codellama": 12288,     # 16K context * 0.75
+    "deepseek": 24576,      # 32K context * 0.75
+    "phi": 3072,            # 4K context * 0.75
+}
+
+# Default context token budget (fallback for unknown models)
+DEFAULT_MAX_CONTEXT_TOKENS = 4096
+
+
+def get_model_context_limit(model_name: str) -> int:
+    """Get context token limit based on model capabilities.
+
+    Returns ~75% of model's context window to leave room for response generation.
+
+    Args:
+        model_name: The model name/identifier (e.g., "llama3.1:8b", "mistral:7b")
+
+    Returns:
+        Token limit for context window. Falls back to DEFAULT_MAX_CONTEXT_TOKENS
+        if model is not recognized.
+    """
+    if not model_name:
+        return DEFAULT_MAX_CONTEXT_TOKENS
+
+    model_lower = model_name.lower()
+    # Check patterns in order (more specific patterns first due to dict ordering)
+    for pattern, limit in MODEL_CONTEXT_LIMITS.items():
+        if pattern in model_lower:
+            return limit
+    return DEFAULT_MAX_CONTEXT_TOKENS  # fallback
 
 
 # Few-shot examples for domain-specific response formatting
@@ -255,9 +298,6 @@ class RetrievalResult:
 
 
 class RAGPipeline:
-    # Default context token budget (leaves room for system prompt, query, and response)
-    DEFAULT_MAX_CONTEXT_TOKENS = 4096
-
     def __init__(self):
         self.ollama_host = settings.ollama_host
         self.default_model = settings.ollama_default_model
@@ -294,7 +334,7 @@ class RAGPipeline:
             Combined context string for LLM, truncated to fit within token budget
         """
         if max_context_tokens is None:
-            max_context_tokens = self.DEFAULT_MAX_CONTEXT_TOKENS
+            max_context_tokens = DEFAULT_MAX_CONTEXT_TOKENS
 
         context_parts = []
         current_tokens = 0
@@ -1212,7 +1252,8 @@ Question: {query}"""
                     )
                     context_str = self._format_context(
                         retrieval_result.documents,
-                        web_context=retrieval_result.web_search_context
+                        web_context=retrieval_result.web_search_context,
+                        max_context_tokens=get_model_context_limit(model)
                     )
                 except Exception as e:
                     logger.error("Error retrieving context: %s", e)
@@ -1445,7 +1486,8 @@ Question: {query}"""
                     )
                     context_str = self._format_context(
                         retrieval_result.documents,
-                        web_context=retrieval_result.web_search_context
+                        web_context=retrieval_result.web_search_context,
+                        max_context_tokens=get_model_context_limit(model)
                     )
                     query_span.set_attribute(SpanAttributes.PIPELINE_SOURCE_COUNT, len(retrieval_result.documents))
                 except Exception as e:
