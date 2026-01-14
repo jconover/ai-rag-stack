@@ -12,12 +12,14 @@ Features:
 - Idempotent ingestion using content-based deterministic UUIDs (no duplicates on re-run)
 - Chunk deduplication (exact and fuzzy) to remove duplicate content before embedding
 - Transactional consistency with two-phase commit between registry and Qdrant
+- Documentation freshness tracking to detect stale content
 
 Usage:
     python ingest_docs.py              # Incremental ingestion (default)
     python ingest_docs.py --full       # Force full re-ingestion
     python ingest_docs.py --dry-run    # Show what would be processed
     python ingest_docs.py --stats      # Show registry statistics
+    python ingest_docs.py --freshness  # Show documentation freshness report
     python ingest_docs.py --check-duplicates  # Check for duplicate vectors
     python ingest_docs.py --no-dedup   # Disable chunk deduplication
     python ingest_docs.py --fuzzy-dedup --fuzzy-threshold 0.9  # Enable fuzzy dedup
@@ -96,6 +98,9 @@ from chunk_deduplication import (
     DeduplicationStats,
     log_deduplication_stats,
 )
+
+# Import freshness tracker
+from freshness_tracker import freshness_tracker
 
 # Configuration
 DOCS_DIR = os.getenv("DOCS_DIR", "../data/docs")
@@ -1184,6 +1189,12 @@ class DocumentIngestionPipeline:
             print(f"Scanning {source_name} documentation...")
             print(f"{'='*60}")
 
+            # Record freshness tracking for this source
+            try:
+                freshness_tracker.record_download(source_name, directory)
+            except Exception as e:
+                print(f"  Warning: Could not record freshness for {source_name}: {e}")
+
             # Scan directory for all files with hashes
             current_files = scan_directory_with_hashes(
                 Path(directory),
@@ -1692,6 +1703,7 @@ Examples:
   python ingest_docs.py --full       # Force full re-ingestion
   python ingest_docs.py --dry-run    # Preview what would be processed
   python ingest_docs.py --stats      # Show registry statistics only
+  python ingest_docs.py --freshness  # Show documentation freshness report
   python ingest_docs.py --source kubernetes  # Process only kubernetes docs
   python ingest_docs.py --check-duplicates   # Check for duplicate vectors
   python ingest_docs.py --no-dedup           # Disable chunk deduplication
@@ -1799,6 +1811,12 @@ Fuzzy deduplication can catch near-duplicates with minor differences.
         help='Maximum age in hours for staged entries before cleanup (default: 24)'
     )
 
+    parser.add_argument(
+        '--freshness',
+        action='store_true',
+        help='Show documentation freshness report and exit'
+    )
+
     return parser.parse_args()
 
 
@@ -1820,6 +1838,12 @@ def main():
         print(f"Cleared {count} entries from the ingestion registry")
         if not args.full:
             print("Tip: Use --full flag to re-index all documents")
+        return
+
+    # Handle freshness report mode
+    if args.freshness:
+        print("Documentation Freshness Report")
+        freshness_tracker.print_report()
         return
 
     # Handle duplicate check mode
@@ -1980,6 +2004,10 @@ def main():
     )
 
     print("\nIngestion complete!")
+
+    # Print freshness report after successful ingestion (not for dry runs)
+    if not args.dry_run:
+        freshness_tracker.print_report()
 
 
 if __name__ == "__main__":

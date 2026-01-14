@@ -215,6 +215,36 @@ services:
       timeout: 10s
       retries: 3
 
+  # DCGM Exporter - NVIDIA GPU metrics for Prometheus (optional)
+  # Enable with: docker compose --profile gpu-monitoring up -d
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.0-3.2.0-ubuntu22.04
+    container_name: dcgm-exporter
+    runtime: nvidia
+    ports:
+      - "9400:9400"
+    environment:
+      # Collect metrics every 10 seconds
+      - DCGM_EXPORTER_INTERVAL=10000
+      # Listen on all interfaces
+      - DCGM_EXPORTER_LISTEN=:9400
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - gpu-monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9400/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   ollama_data:
     driver: local

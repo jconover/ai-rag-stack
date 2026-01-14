@@ -36,6 +36,8 @@ from app.models import (
     PostgresPoolStats, PostgresPoolStatsSafe, QueryLogEntry, QueryLogsResponse,
     QueryAnalyticsSummary,
     CircuitBreakerStatus, CircuitBreakersStatus, DeviceInfo,
+    # Query validation constant
+    MAX_QUERY_LENGTH,
     # A/B Testing models
     ExperimentCreate, ExperimentUpdate, ExperimentResponse,
     ExperimentListResponse, ExperimentStatsResponse,
@@ -55,6 +57,8 @@ from app.models import (
     # Drift detection models
     DriftCheckResponse, DriftStatusResponse, DriftHistoryResponse,
     DriftHistoryEntry, DriftMetricsResponse, SetBaselineResponse,
+    # Documentation freshness models
+    SourceFreshnessModel, FreshnessReportResponse,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
@@ -90,6 +94,7 @@ from app.device_utils import (
     get_device_info, log_device_configuration,
     get_actual_embedding_device, get_actual_reranker_device,
 )
+from app.conversation_storage import conversation_storage
 
 logger = logging.getLogger(__name__)
 
@@ -245,8 +250,38 @@ class AnalyticsMiddleware(BaseHTTPMiddleware):
 # Limits: 30 requests/minute for chat endpoints (expensive LLM calls)
 limiter = Limiter(key_func=get_remote_address)
 
-# Maximum query length to prevent OOM in embedding/LLM
-MAX_QUERY_LENGTH = 8000
+# MAX_QUERY_LENGTH is imported from app.models to prevent OOM in embedding/LLM
+
+
+def validate_query_length(query: str, max_length: int = None) -> str:
+    """Validate query length to prevent resource exhaustion.
+
+    Args:
+        query: The user's query string
+        max_length: Maximum allowed length (defaults to MAX_QUERY_LENGTH)
+
+    Returns:
+        The validated query string (stripped of leading/trailing whitespace)
+
+    Raises:
+        HTTPException: If query is empty or exceeds maximum length
+    """
+    if max_length is None:
+        max_length = MAX_QUERY_LENGTH
+
+    if not query or not query.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Query cannot be empty"
+        )
+
+    if len(query) > max_length:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Query too long. Maximum length is {max_length} characters, got {len(query)}."
+        )
+
+    return query.strip()
 
 
 async def warmup_ollama_model():
@@ -376,27 +411,102 @@ def get_redis_pool_stats() -> dict:
 
 
 def get_conversation_history(session_id: str, limit: int = 5) -> list:
-    """Get conversation history from Redis"""
+    """Get conversation history from Redis.
+
+    When summarization is enabled, returns recent messages from the
+    ConversationStorage system. Otherwise, uses the legacy direct Redis access.
+
+    Args:
+        session_id: Session identifier
+        limit: Maximum number of messages to return
+
+    Returns:
+        List of message dictionaries with role and content
+    """
     try:
-        history_key = f"chat:{session_id}"
-        messages = redis_client.lrange(history_key, -limit, -1)
-        return [json.loads(msg) for msg in messages]
-    except:
+        if settings.conversation_summarization_enabled:
+            return conversation_storage.get_history(session_id, limit=limit)
+        else:
+            # Legacy behavior for backward compatibility
+            history_key = f"chat:{session_id}"
+            messages = redis_client.lrange(history_key, -limit, -1)
+            return [json.loads(msg) for msg in messages]
+    except Exception:
         return []
 
 
+def get_conversation_context(session_id: str, max_recent: int = 5) -> dict:
+    """Get full conversation context including summary and recent messages.
+
+    This function provides enhanced context retrieval when summarization
+    is enabled, including accumulated summaries from prior conversation
+    segments.
+
+    Args:
+        session_id: Session identifier
+        max_recent: Maximum number of recent messages to include
+
+    Returns:
+        Dictionary with:
+            - summary: Accumulated conversation summary (or None)
+            - recent_messages: List of recent message dicts
+            - has_history: Boolean indicating if any history exists
+            - message_count: Total messages in current window
+    """
+    if settings.conversation_summarization_enabled:
+        return conversation_storage.get_context_sync(session_id, max_recent=max_recent)
+    else:
+        # Return compatible format for non-summarization mode
+        history = get_conversation_history(session_id, limit=max_recent)
+        return {
+            "summary": None,
+            "recent_messages": history,
+            "has_history": len(history) > 0,
+            "message_count": len(history)
+        }
+
+
 def save_message(session_id: str, role: str, content: str):
-    """Save message to conversation history using pipeline for efficiency."""
+    """Save message to conversation history using pipeline for efficiency.
+
+    When summarization is enabled, uses the ConversationStorage system
+    which handles tiered storage and automatic summarization triggers.
+
+    Args:
+        session_id: Session identifier
+        role: Message role ('user' or 'assistant')
+        content: Message content
+    """
     try:
-        history_key = f"chat:{session_id}"
-        message = json.dumps({"role": role, "content": content})
-        # Use pipeline to batch rpush and expire into single round-trip
-        pipe = redis_client.pipeline()
-        pipe.rpush(history_key, message)
-        pipe.expire(history_key, 86400)  # 24 hour expiry
-        pipe.execute()
+        if settings.conversation_summarization_enabled:
+            conversation_storage.add_message_sync(session_id, role, content)
+        else:
+            # Legacy behavior for backward compatibility
+            history_key = f"chat:{session_id}"
+            message = json.dumps({"role": role, "content": content})
+            # Use pipeline to batch rpush and expire into single round-trip
+            pipe = redis_client.pipeline()
+            pipe.rpush(history_key, message)
+            pipe.expire(history_key, 86400)  # 24 hour expiry
+            pipe.execute()
     except Exception as e:
         print(f"Error saving message: {e}")
+
+
+async def check_and_trigger_summarization(session_id: str):
+    """Check if summarization should be triggered and perform it.
+
+    This is called asynchronously after saving messages to avoid
+    blocking the response. Only runs when summarization is enabled.
+
+    Args:
+        session_id: Session identifier
+    """
+    if settings.conversation_summarization_enabled:
+        try:
+            await conversation_storage.check_and_summarize(session_id)
+        except Exception as e:
+            logger.warning(f"Failed to trigger summarization for session {session_id}: {e}")
 
 
 @app.get("/")
@@ -1043,12 +1153,8 @@ async def chat(
 
     Rate limited to 30 requests per minute per IP address.
     """
-    # Validate query length to prevent OOM
-    if len(chat_request.message) > MAX_QUERY_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
-        )
+    # Validate query length to prevent OOM and empty queries
+    validated_query = validate_query_length(chat_request.message)
 
     # Generate or use provided session ID
     session_id = chat_request.session_id or str(uuid.uuid4())
@@ -1060,8 +1166,8 @@ async def chat(
     # This is used for context-aware retrieval to resolve pronouns/references
     conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
 
-    # Save user message
-    save_message(session_id, "user", chat_request.message)
+    # Save user message (use validated/trimmed query)
+    save_message(session_id, "user", validated_query)
 
     # Track timing for query logging
     start_time = time.time()
@@ -1090,7 +1196,7 @@ async def chat(
     try:
         # Generate response with conversation history for context-aware retrieval
         result = await rag_pipeline.generate_response(
-            query=chat_request.message,
+            query=validated_query,
             model=chat_request.model,
             temperature=chat_request.temperature,
             max_tokens=chat_request.max_tokens,
@@ -1104,10 +1210,17 @@ async def chat(
         # Save assistant response
         save_message(session_id, "assistant", result['response'])
 
+        # Trigger conversation summarization in background if enabled
+        if settings.conversation_summarization_enabled:
+            _create_background_task(
+                check_and_trigger_summarization(session_id),
+                task_name="conversation_summarization"
+            )
+
         # Store analytics data on request state for middleware to capture
         if settings.analytics_enabled:
             request.state.analytics_model = result['model']
-            request.state.analytics_query = chat_request.message
+            request.state.analytics_query = validated_query
             retrieval_metrics = result.get('retrieval_metrics', {})
             if retrieval_metrics:
                 request.state.analytics_cache_hit = retrieval_metrics.get('embedding_cache_hit')
@@ -1120,7 +1233,7 @@ async def chat(
             _create_background_task(
                 log_query_to_postgres(
                     session_id=session_id,
-                    query=chat_request.message,
+                    query=validated_query,
                     model=result['model'],
                     result=result,
                     total_time_ms=total_time_ms,
@@ -1158,12 +1271,8 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
 
     Rate limited to 30 requests per minute per IP address.
     """
-    # Validate query length to prevent OOM
-    if len(chat_request.message) > MAX_QUERY_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
-        )
+    # Validate query length to prevent OOM and empty queries
+    validated_query = validate_query_length(chat_request.message)
 
     # Generate or use provided session ID
     session_id = chat_request.session_id or str(uuid.uuid4())
@@ -1172,8 +1281,8 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
     # This is used for context-aware retrieval to resolve pronouns/references
     conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
 
-    # Save user message
-    save_message(session_id, "user", chat_request.message)
+    # Save user message (use validated/trimmed query)
+    save_message(session_id, "user", validated_query)
 
     # Track start time for analytics
     stream_start_time = time.time()
@@ -1187,7 +1296,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
 
         try:
             async for chunk in rag_pipeline.generate_response_stream(
-                query=chat_request.message,
+                query=validated_query,
                 model=chat_request.model,
                 temperature=chat_request.temperature,
                 max_tokens=chat_request.max_tokens,
@@ -1214,6 +1323,11 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
             if full_response:
                 save_message(session_id, "assistant", full_response)
 
+                # Trigger conversation summarization in background if enabled
+                # Note: We use asyncio.create_task here since we're in an async generator
+                if settings.conversation_summarization_enabled:
+                    asyncio.create_task(check_and_trigger_summarization(session_id))
+
         except Exception as e:
             is_error = True
             error_chunk = {
@@ -1234,7 +1348,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
                     endpoint="/api/chat/stream",
                     cache_hit=cache_hit,
                     avg_similarity_score=avg_score,
-                    query=chat_request.message,
+                    query=validated_query,
                 )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -1270,6 +1384,163 @@ async def get_stats():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/docs/freshness", response_model=FreshnessReportResponse)
+async def get_docs_freshness():
+    """Get documentation freshness report.
+
+    Returns freshness status for all tracked documentation sources,
+    indicating which sources may be outdated and need updating.
+
+    Risk levels:
+    - fresh: Documentation is up to date
+    - low: Consider updating soon
+    - medium: Update recommended
+    - high: Update required - documentation may be outdated
+    - unknown: No tracking data available
+
+    Returns:
+        FreshnessReportResponse with status for all sources
+    """
+    try:
+        # Import here to avoid circular imports and handle missing module
+        import sys
+        scripts_path = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_path) not in sys.path:
+            sys.path.insert(0, str(scripts_path))
+
+        from freshness_tracker import freshness_tracker
+
+        # Get all freshness data
+        all_freshness = freshness_tracker.get_all_freshness()
+
+        # Convert to Pydantic models
+        sources = [
+            SourceFreshnessModel(
+                source_type=f.source_type,
+                last_download=f.last_download,
+                last_commit_date=f.last_commit_date,
+                days_since_update=f.days_since_update,
+                staleness_risk=f.staleness_risk,
+                recommended_action=f.recommended_action,
+            )
+            for f in all_freshness
+        ]
+
+        # Calculate counts
+        stale_count = sum(1 for s in sources if s.staleness_risk in ["medium", "high", "critical"])
+        fresh_count = sum(1 for s in sources if s.staleness_risk == "fresh")
+
+        return FreshnessReportResponse(
+            sources=sources,
+            total_sources=len(sources),
+            stale_count=stale_count,
+            fresh_count=fresh_count,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except ImportError as e:
+        logger.warning(f"Freshness tracker not available: {e}")
+        return FreshnessReportResponse(
+            sources=[],
+            total_sources=0,
+            stale_count=0,
+            fresh_count=0,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as e:
+        logger.error(f"Error getting freshness report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/gpu-metrics")
+async def get_gpu_metrics():
+    """Get GPU utilization metrics for monitoring.
+
+    Returns GPU memory usage, utilization percentage, and temperature
+    if nvidia-smi is available. Returns error status if not available.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--format=csv,noheader,nounits"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode != 0:
+            return {
+                "available": False,
+                "error": "nvidia-smi command failed",
+                "gpus": []
+            }
+
+        gpus = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 6:
+                idx, name, util, mem_used, mem_total, temp = parts[:6]
+                gpus.append({
+                    "index": int(idx),
+                    "name": name,
+                    "utilization_percent": float(util),
+                    "memory_used_mb": float(mem_used),
+                    "memory_total_mb": float(mem_total),
+                    "memory_utilization_percent": round(float(mem_used) / float(mem_total) * 100, 1) if float(mem_total) > 0 else 0,
+                    "temperature_celsius": float(temp)
+                })
+
+        return {
+            "available": True,
+            "gpu_count": len(gpus),
+            "gpus": gpus,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"available": False, "error": "nvidia-smi timeout", "gpus": []}
+    except FileNotFoundError:
+        return {"available": False, "error": "nvidia-smi not found", "gpus": []}
+    except Exception as e:
+        return {"available": False, "error": str(e), "gpus": []}
+
+
+@app.get("/api/ollama-status")
+async def get_ollama_status():
+    """Get Ollama service status and loaded models."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Get running models
+            ps_response = await client.get(f"{settings.ollama_host}/api/ps")
+            ps_data = ps_response.json() if ps_response.status_code == 200 else {}
+
+            # Get available models
+            tags_response = await client.get(f"{settings.ollama_host}/api/tags")
+            tags_data = tags_response.json() if tags_response.status_code == 200 else {}
+
+        return {
+            "available": True,
+            "host": settings.ollama_host,
+            "running_models": ps_data.get("models", []),
+            "available_models": [m.get("name") for m in tags_data.get("models", [])],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "host": settings.ollama_host,
+            "error": str(e),
+            "running_models": [],
+            "available_models": []
+        }
 
 
 @app.get("/api/circuit-breakers", response_model=CircuitBreakersStatus)
@@ -1331,6 +1602,87 @@ async def get_history(session_id: str, limit: int = 10):
     """Get conversation history for a session"""
     history = get_conversation_history(session_id, limit)
     return {"session_id": session_id, "messages": history}
+
+
+@app.get("/api/conversation/{session_id}/context")
+async def get_session_context(session_id: str, max_recent: int = 5):
+    """Get full conversation context including summary and recent messages.
+
+    When conversation summarization is enabled, this endpoint returns both
+    the accumulated summary of older messages and the most recent messages.
+    This is useful for understanding the full conversation context without
+    retrieving all individual messages.
+
+    Args:
+        session_id: Session identifier
+        max_recent: Maximum number of recent messages to include (default: 5)
+
+    Returns:
+        Dictionary with summary, recent_messages, has_history, and message_count
+    """
+    context = get_conversation_context(session_id, max_recent=max_recent)
+    return {
+        "session_id": session_id,
+        "summarization_enabled": settings.conversation_summarization_enabled,
+        **context
+    }
+
+
+@app.get("/api/conversation/{session_id}/stats")
+async def get_session_stats(session_id: str):
+    """Get statistics about a conversation session.
+
+    Returns storage statistics including message counts, TTL information,
+    and summary status. Only available when summarization is enabled.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Dictionary with session statistics
+    """
+    if settings.conversation_summarization_enabled:
+        stats = conversation_storage.get_session_stats(session_id)
+        return {
+            "summarization_enabled": True,
+            **stats
+        }
+    else:
+        # Return basic stats when summarization is disabled
+        history = get_conversation_history(session_id, limit=100)
+        return {
+            "summarization_enabled": False,
+            "session_id": session_id,
+            "message_count": len(history),
+            "has_summary": False,
+        }
+
+
+@app.delete("/api/conversation/{session_id}")
+async def clear_session(session_id: str):
+    """Clear all data for a conversation session.
+
+    This removes all messages, summaries, and metadata associated with
+    the session. Use with caution as this action cannot be undone.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Confirmation message
+    """
+    if settings.conversation_summarization_enabled:
+        conversation_storage.clear_session(session_id)
+    else:
+        # Clear legacy storage format
+        history_key = f"chat:{session_id}"
+        redis_client.delete(history_key)
+
+    return {
+        "status": "cleared",
+        "session_id": session_id,
+        "message": f"All conversation data for session {session_id} has been cleared"
+    }
 
 
 @app.get("/api/templates")

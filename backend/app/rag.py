@@ -39,6 +39,62 @@ from app.drift_detection import drift_detector
 logger = logging.getLogger(__name__)
 
 
+# Complexity indicators for chain-of-thought prompting
+# Each indicator is a lambda that returns True if the query exhibits that characteristic
+COMPLEXITY_INDICATORS = {
+    "long_query": lambda q: len(q.split()) > 20,
+    "multiple_requirements": lambda q: q.count(" and ") >= 2 or q.count(",") >= 3,
+    "multi_step": lambda q: bool(re.search(r"\b(step|steps|process|workflow|pipeline|then|after|before)\b", q, re.I)),
+    "conditional": lambda q: bool(re.search(r"\b(if|when|unless|depending|based on)\b", q, re.I)),
+    "comparison": lambda q: bool(re.search(r"\b(compare|vs|versus|difference|better|which)\b", q, re.I)),
+}
+
+
+def _is_complex_query(query: str) -> bool:
+    """Detect queries that benefit from step-by-step reasoning.
+
+    A query is considered complex if it matches 2 or more complexity indicators.
+    Complex queries benefit from chain-of-thought prompting to improve response quality.
+
+    Args:
+        query: The user's question/query string
+
+    Returns:
+        True if query is complex enough to warrant CoT scaffolding
+    """
+    score = sum(1 for check in COMPLEXITY_INDICATORS.values() if check(query))
+    return score >= 2
+
+
+def _get_complexity_score(query: str) -> int:
+    """Get the complexity score for a query.
+
+    Args:
+        query: The user's question/query string
+
+    Returns:
+        Number of complexity indicators matched (0-5)
+    """
+    return sum(1 for check in COMPLEXITY_INDICATORS.values() if check(query))
+
+
+# Chain-of-thought scaffold for complex queries (full version for highly complex)
+COT_SCAFFOLD = """
+
+Before providing your answer, analyze this step-by-step:
+1. What are the distinct requirements or parts of this question?
+2. What is the logical order to address them?
+3. Are there dependencies between components?
+4. What assumptions am I making that should be stated?
+
+Now provide your comprehensive response:"""
+
+# Shorter scaffold for moderately complex queries
+COT_SCAFFOLD_SHORT = """
+
+Think through this step-by-step, then provide your answer:"""
+
+
 # Model-specific context window limits (tokens)
 # Using ~75% of actual limit to leave room for response generation
 MODEL_CONTEXT_LIMITS = {
@@ -229,6 +285,70 @@ FEW_SHOT_DOMAIN_PATTERNS = [
     # CI/CD
     (["github actions", "gitlab ci", "jenkins", "pipeline", "workflow", "ci/cd", "cicd", "build pipeline", "deploy pipeline"], "cicd"),
 ]
+
+
+# Task type detection patterns and specialized instructions
+TASK_TYPE_PATTERNS = {
+    "generate": {
+        "patterns": [
+            r"\b(create|write|generate|build|make|implement|setup|configure|add)\b.*\?*$",
+            r"\b(example|template|sample)\s+(of|for)\b",
+        ],
+        "instruction": """
+TASK TYPE: Code Generation
+- Produce complete, runnable code - no placeholders or "..."
+- Include all necessary imports and dependencies
+- Add brief comments for non-obvious logic
+- Show the command to run/test if applicable
+"""
+    },
+    "explain": {
+        "patterns": [
+            r"\b(explain|what is|what are|how does|describe|define|understand)\b",
+            r"\b(difference|differences?)\s+between\b",
+            r"\bwhy\s+(should|would|do|does|is|are)\b",
+        ],
+        "instruction": """
+TASK TYPE: Explanation
+- Start with a one-sentence summary
+- Use concrete examples to illustrate concepts
+- Reference specific documentation sources when available
+"""
+    },
+    "debug": {
+        "patterns": [
+            r"\b(error|bug|fix|debug|troubleshoot|not working|failing|issue|problem)\b",
+            r"\b(crash|exception|traceback|failed)\b",
+        ],
+        "instruction": """
+TASK TYPE: Debugging
+- First identify the likely root cause category
+- Provide diagnostic commands to gather more info
+- Suggest fixes in order of likelihood
+- Explain WHY the fix works
+"""
+    },
+    "compare": {
+        "patterns": [
+            r"\b(compare|vs|versus|or)\b.*\b(which|better|difference)\b",
+            r"\b(pros|cons|advantages|disadvantages)\b",
+        ],
+        "instruction": """
+TASK TYPE: Comparison
+- Use a structured format (table or bullet points)
+- Cover: use cases, pros, cons, complexity
+- Give a clear recommendation for common scenarios
+"""
+    },
+}
+
+_TASK_TYPE_COMPILED = {
+    task_type: {
+        "patterns": [re.compile(p, re.IGNORECASE) for p in config["patterns"]],
+        "instruction": config["instruction"]
+    }
+    for task_type, config in TASK_TYPE_PATTERNS.items()
+}
 
 
 def select_few_shot_example(query: str) -> Optional[Dict[str, str]]:
@@ -532,18 +652,46 @@ State limitations clearly and suggest alternative resources if appropriate.
 
         return "default"
 
-    def _get_system_prompt(self, model: Optional[str] = None) -> str:
+    def _detect_task_type(self, query: str) -> Tuple[str, str]:
+        """Detect query task type and return (type_name, additional_instruction).
+
+        Analyzes the query against task-specific patterns to determine the
+        intent (generate, explain, debug, compare) and returns corresponding
+        specialized instructions to inject into the prompt.
+
+        Args:
+            query: The user's question/query string
+
+        Returns:
+            Tuple of (task_type_name, task_instruction):
+            - task_type_name: One of "generate", "explain", "debug", "compare", or "general"
+            - task_instruction: Specialized instruction text for detected task type,
+                               or empty string for "general" queries
+        """
+        for task_type, config in _TASK_TYPE_COMPILED.items():
+            for pattern in config["patterns"]:
+                if pattern.search(query):
+                    if settings.log_retrieval_details:
+                        logger.info(f"Detected task type: {task_type} for query: '{query[:50]}...'")
+                    return task_type, config["instruction"]
+        return "general", ""
+
+    def _get_system_prompt(self, model: Optional[str] = None, query: Optional[str] = None) -> str:
         """Get the system prompt optimized for the specified model family.
 
         Auto-detects model family from the model name and returns an
         optimized system prompt tailored to that family's instruction
-        following style and known strengths.
+        following style and known strengths. If a query is provided,
+        also detects task type and injects task-specific instructions.
 
         Args:
             model: The model name (e.g., "llama3.1:8b"). If None, uses default model.
+            query: Optional query string for task type detection. If provided,
+                   task-specific instructions are appended to the system prompt.
 
         Returns:
-            System prompt string optimized for the model family
+            System prompt string optimized for the model family, with optional
+            task-specific instructions appended.
         """
         model = model or self.default_model
         family = self._detect_model_family(model)
@@ -556,24 +704,65 @@ State limitations clearly and suggest alternative resources if appropriate.
             else:
                 logger.info(f"Using default system prompt for unrecognized model: {model}")
 
+        # Detect task type and inject specialized instructions if query provided
+        if query:
+            task_type, task_instruction = self._detect_task_type(query)
+            if task_instruction:
+                prompt = f"{prompt}\n{task_instruction}"
+
         return prompt
 
+    def _get_cot_scaffold(self, query: str) -> str:
+        """Get chain-of-thought scaffold if query is complex.
+
+        Uses complexity indicators to determine if the query would benefit
+        from step-by-step reasoning. Returns appropriate scaffold based on
+        complexity level:
+        - Score >= 3: Full scaffold with detailed analysis prompts
+        - Score 2: Short scaffold for simpler step-by-step reasoning
+        - Score < 2: No scaffold (query is simple enough)
+
+        Args:
+            query: The user's question/query string
+
+        Returns:
+            CoT scaffold string to append to user prompt, or empty string
+        """
+        if not settings.chain_of_thought_enabled:
+            return ""
+
+        if not _is_complex_query(query):
+            return ""
+
+        # Use shorter scaffold for moderately complex, full for very complex
+        complexity_score = _get_complexity_score(query)
+
+        if settings.log_retrieval_details:
+            logger.info(f"Query complexity score: {complexity_score}/5, using CoT scaffold")
+
+        if complexity_score >= 3:
+            return COT_SCAFFOLD
+        return COT_SCAFFOLD_SHORT
+
     def _get_user_prompt(self, query: str, context: str) -> str:
-        """Build the user prompt with context and query."""
+        """Build the user prompt with context, query, and optional CoT scaffold."""
+        cot_scaffold = self._get_cot_scaffold(query)
+
         if context:
             return f"""Context from documentation:
 {context}
 
-Question: {query}"""
+Question: {query}{cot_scaffold}"""
         else:
-            return query
+            return f"{query}{cot_scaffold}"
 
     def _build_messages(self, query: str, context: str, model: Optional[str] = None) -> List[Dict[str, str]]:
         """Build messages list with proper system/user role separation.
 
         Optionally includes few-shot examples as user/assistant message pairs
         to improve output consistency and formatting. Examples are selected
-        based on domain-specific keywords in the query.
+        based on domain-specific keywords in the query. Task-specific instructions
+        are injected into the system prompt based on detected query intent.
 
         Args:
             query: The user's question
@@ -584,7 +773,7 @@ Question: {query}"""
             List of message dictionaries with system, user, and optional assistant roles
         """
         messages = [
-            {'role': 'system', 'content': self._get_system_prompt(model)},
+            {'role': 'system', 'content': self._get_system_prompt(model, query)},
         ]
 
         # Add few-shot example if enabled and relevant example found

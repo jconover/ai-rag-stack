@@ -1,4 +1,4 @@
-.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus backup backup-verify partition-query-logs partition-status partition-create partition-drop-old
+.PHONY: help verify setup start start-dev stop restart logs clean pull-model ingest health publish aider aider-32b aider-deepseek aider-deepseek-33b setup-aider setup-aider-deepseek update-docs grafana prometheus backup backup-verify partition-query-logs partition-status partition-create partition-drop-old model-deploy model-history model-active model-rollback model-stats
 
 help:
 	@echo "DevOps AI Assistant - Available Commands"
@@ -38,6 +38,14 @@ help:
 	@echo "partition-status     - Show query_logs partition status"
 	@echo "partition-create     - Create future partitions (3 months ahead)"
 	@echo "partition-drop-old   - Drop partitions older than 12 months"
+	@echo ""
+	@echo "Model Version Tracking:"
+	@echo "  model-deploy MODEL=<name> - Deploy a model and record in history"
+	@echo "  model-history             - View model deployment history"
+	@echo "  model-active              - Show currently active model"
+	@echo "  model-rollback            - Rollback to previous model deployment"
+	@echo "  model-stats               - Show model deployment statistics"
+	@echo ""
 	@echo "clean          - Clean up containers and volumes"
 	@echo "clean-all      - Clean everything including data"
 
@@ -264,3 +272,33 @@ partition-drop-old:
 partition-validate:
 	@echo "Validating partition health..."
 	docker exec rag-backend python /scripts/create_partitions.py --validate
+
+# =====================================================
+# Model Version Tracking
+# =====================================================
+
+model-deploy:
+	@if [ -z "$(MODEL)" ]; then \
+		echo "Error: MODEL parameter required."; \
+		echo "Usage: make model-deploy MODEL=llama3.1:8b"; \
+		echo "       make model-deploy MODEL=mistral:7b NOTES=\"Initial deployment\""; \
+		exit 1; \
+	fi
+	@echo "Deploying model: $(MODEL)..."
+	@docker exec rag-backend python -c "import asyncio; from app.analytics import log_model_deployment; print(asyncio.run(log_model_deployment('$(MODEL)', deployed_by='$(or $(DEPLOYED_BY),make)', notes=$(if $(NOTES),'\"$(NOTES)\"',None))))"
+
+model-history:
+	@echo "Model deployment history:"
+	@docker exec rag-backend python -c "import asyncio; from app.analytics import get_model_history; import json; print(json.dumps(asyncio.run(get_model_history($(or $(LIMIT),10))), indent=2))"
+
+model-active:
+	@echo "Currently active model:"
+	@docker exec rag-backend python -c "import asyncio; from app.analytics import get_active_deployment; import json; result = asyncio.run(get_active_deployment()); print(json.dumps(result, indent=2) if result else 'No active model deployment found')"
+
+model-rollback:
+	@echo "Rolling back to previous model deployment..."
+	@docker exec rag-backend python -c "import asyncio; from app.analytics import rollback_model; result = asyncio.run(rollback_model()); print(f'Rolled back to: {result}' if result else 'No previous deployment to rollback to')"
+
+model-stats:
+	@echo "Model deployment statistics:"
+	@docker exec rag-backend python -c "import asyncio; from app.analytics import get_model_deployment_stats; import json; print(json.dumps(asyncio.run(get_model_deployment_stats()), indent=2))"

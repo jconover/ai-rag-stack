@@ -424,6 +424,19 @@ class VectorStore:
     # BGE models benefit from query instruction prefix for better retrieval
     BGE_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
+    # Code-specific query instruction for BGE - improves retrieval for code queries
+    BGE_CODE_QUERY_INSTRUCTION = "Represent this code or programming query for searching relevant code examples and documentation: "
+
+    # Pattern to detect code-related queries for specialized embedding
+    CODE_QUERY_PATTERN = re.compile(
+        r'(code|function|class|method|implement|syntax|example|snippet|'
+        r'how to|how do i|write|create|def |class |async |await |'
+        r'import |from |return |print\(|console\.|'
+        r'kubectl|docker|terraform|ansible|helm|yaml|json|'
+        r'error|exception|traceback|debug|fix)',
+        re.IGNORECASE
+    )
+
     # Class-level cache for collection capabilities (sparse vector support, etc.)
     # This avoids repeated get_collection() calls during hybrid search
     _collection_capabilities_cache: Dict[str, Tuple[dict, float]] = {}
@@ -541,6 +554,23 @@ class VectorStore:
 
         return query
 
+    def _is_code_query(self, query: str) -> bool:
+        """Detect if query is code-related for specialized embedding.
+
+        Code-related queries benefit from a specialized BGE instruction prefix
+        that improves retrieval of code examples and programming documentation.
+
+        The detection uses a regex pattern matching common programming terms,
+        DevOps tools, and code syntax patterns.
+
+        Args:
+            query: The query string to analyze
+
+        Returns:
+            True if the query appears to be code-related, False otherwise
+        """
+        return bool(self.CODE_QUERY_PATTERN.search(query))
+
     def _ensure_collection(self):
         """Create collection with optimized settings if it doesn't exist"""
         collections = self.client.get_collections().collections
@@ -632,12 +662,15 @@ class VectorStore:
         1. Query preprocessing (abbreviation expansion, whitespace normalization)
         2. Redis cache lookup for embedding
         3. Embedding generation with BGE instruction prefix if applicable
+           - Uses code-specific instruction for code-related queries
+           - Uses general instruction for other queries
 
         Uses Redis to cache embeddings for 30-50% latency reduction
         on repeated queries. Falls back to direct embedding generation
         if cache is unavailable.
 
         For BGE models, adds instruction prefix for improved retrieval (+5-10%).
+        Code-related queries use a specialized prefix for better code retrieval.
 
         Returns EmbeddingResult with the vector and cache_hit status.
         """
@@ -654,7 +687,12 @@ class VectorStore:
         # Add BGE instruction prefix for better retrieval quality
         embed_query = processed_query
         if 'bge' in settings.embedding_model.lower():
-            embed_query = f"{self.BGE_QUERY_INSTRUCTION}{processed_query}"
+            # Use code-specific instruction for code-related queries
+            if self._is_code_query(processed_query):
+                embed_query = f"{self.BGE_CODE_QUERY_INSTRUCTION}{processed_query}"
+                logger.debug(f"Using code-specific BGE instruction for query: {processed_query[:50]}...")
+            else:
+                embed_query = f"{self.BGE_QUERY_INSTRUCTION}{processed_query}"
 
         vector = self.embeddings.embed_query(embed_query)
         _embedding_cache.put(processed_query, vector)  # Cache with processed query as key

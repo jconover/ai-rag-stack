@@ -454,3 +454,261 @@ def reset_metrics_collector():
     global _metrics_collector
     if _metrics_collector:
         _metrics_collector.reset()
+
+
+# =============================================================================
+# Model Deployment Tracking (Database-backed)
+# =============================================================================
+
+
+async def log_model_deployment(
+    model_name: str,
+    deployed_by: Optional[str] = None,
+    notes: Optional[str] = None,
+    avg_latency_ms: Optional[float] = None,
+    avg_tokens_per_second: Optional[float] = None,
+    deployment_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Log a new model deployment.
+
+    Deactivates all previous deployments and creates a new active deployment record.
+
+    Args:
+        model_name: Name and version of the model (e.g., 'llama3.1:8b')
+        deployed_by: User or system that initiated the deployment
+        notes: Deployment notes or changelog
+        avg_latency_ms: Average latency at deployment time
+        avg_tokens_per_second: Token generation rate at deployment time
+        deployment_config: Additional deployment configuration
+
+    Returns:
+        Dictionary with deployment details including id and deployed_at timestamp
+    """
+    from sqlalchemy import update
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        # Deactivate all previous active deployments
+        await db.execute(
+            update(ModelDeployment)
+            .where(ModelDeployment.is_active == True)  # noqa: E712
+            .values(is_active=False)
+        )
+
+        # Create new deployment record
+        deployment = ModelDeployment(
+            model_name=model_name,
+            deployed_by=deployed_by,
+            notes=notes,
+            avg_latency_ms=avg_latency_ms,
+            avg_tokens_per_second=avg_tokens_per_second,
+            deployment_config=deployment_config,
+            is_active=True,
+        )
+        db.add(deployment)
+        await db.flush()  # Get the generated ID
+
+        logger.info(f"Model deployment logged: {model_name} (id={deployment.id})")
+
+        return {
+            "id": deployment.id,
+            "model_name": deployment.model_name,
+            "deployed_at": deployment.deployed_at.isoformat() if deployment.deployed_at else None,
+            "deployed_by": deployment.deployed_by,
+            "is_active": deployment.is_active,
+            "notes": deployment.notes,
+        }
+
+
+async def get_model_history(limit: int = 10) -> List[Dict[str, Any]]:
+    """Get recent model deployment history.
+
+    Args:
+        limit: Maximum number of deployments to return (default: 10)
+
+    Returns:
+        List of deployment records ordered by deployed_at descending
+    """
+    from sqlalchemy import select
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(ModelDeployment)
+            .order_by(ModelDeployment.deployed_at.desc())
+            .limit(limit)
+        )
+        deployments = result.scalars().all()
+
+        return [
+            {
+                "id": d.id,
+                "model_name": d.model_name,
+                "deployed_at": d.deployed_at.isoformat() if d.deployed_at else None,
+                "deployed_by": d.deployed_by,
+                "is_active": d.is_active,
+                "notes": d.notes,
+                "avg_latency_ms": d.avg_latency_ms,
+                "avg_tokens_per_second": d.avg_tokens_per_second,
+            }
+            for d in deployments
+        ]
+
+
+async def get_active_model() -> Optional[str]:
+    """Get the currently active model.
+
+    Returns:
+        Model name of the currently active deployment, or None if no active deployment
+    """
+    from sqlalchemy import select
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(ModelDeployment)
+            .where(ModelDeployment.is_active == True)  # noqa: E712
+            .order_by(ModelDeployment.deployed_at.desc())
+            .limit(1)
+        )
+        deployment = result.scalar_one_or_none()
+
+        return deployment.model_name if deployment else None
+
+
+async def get_active_deployment() -> Optional[Dict[str, Any]]:
+    """Get the currently active deployment with full details.
+
+    Returns:
+        Dictionary with deployment details, or None if no active deployment
+    """
+    from sqlalchemy import select
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(ModelDeployment)
+            .where(ModelDeployment.is_active == True)  # noqa: E712
+            .order_by(ModelDeployment.deployed_at.desc())
+            .limit(1)
+        )
+        deployment = result.scalar_one_or_none()
+
+        if deployment is None:
+            return None
+
+        return {
+            "id": deployment.id,
+            "model_name": deployment.model_name,
+            "deployed_at": deployment.deployed_at.isoformat() if deployment.deployed_at else None,
+            "deployed_by": deployment.deployed_by,
+            "is_active": deployment.is_active,
+            "notes": deployment.notes,
+            "avg_latency_ms": deployment.avg_latency_ms,
+            "avg_tokens_per_second": deployment.avg_tokens_per_second,
+            "deployment_config": deployment.deployment_config,
+        }
+
+
+async def rollback_model() -> Optional[str]:
+    """Rollback to the previous model deployment.
+
+    Deactivates the current active model and reactivates the previous deployment.
+
+    Returns:
+        Model name of the newly activated (previous) deployment, or None if no previous deployment exists
+    """
+    from sqlalchemy import select, update
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        # Get the two most recent deployments
+        result = await db.execute(
+            select(ModelDeployment)
+            .order_by(ModelDeployment.deployed_at.desc())
+            .limit(2)
+        )
+        deployments = result.scalars().all()
+
+        if len(deployments) < 2:
+            logger.warning("Cannot rollback: no previous deployment exists")
+            return None
+
+        current_deployment = deployments[0]
+        previous_deployment = deployments[1]
+
+        # Deactivate all deployments first
+        await db.execute(
+            update(ModelDeployment)
+            .where(ModelDeployment.is_active == True)  # noqa: E712
+            .values(is_active=False)
+        )
+
+        # Reactivate the previous deployment
+        await db.execute(
+            update(ModelDeployment)
+            .where(ModelDeployment.id == previous_deployment.id)
+            .values(is_active=True)
+        )
+
+        logger.info(
+            f"Model rollback: {current_deployment.model_name} -> {previous_deployment.model_name}"
+        )
+
+        return previous_deployment.model_name
+
+
+async def get_model_deployment_stats() -> Dict[str, Any]:
+    """Get statistics about model deployments.
+
+    Returns:
+        Dictionary with deployment statistics including counts by model and recent activity
+    """
+    from sqlalchemy import select, func
+    from app.database import get_db_context
+    from app.db_models import ModelDeployment
+
+    async with get_db_context() as db:
+        # Total deployments
+        total_result = await db.execute(
+            select(func.count(ModelDeployment.id))
+        )
+        total_deployments = total_result.scalar() or 0
+
+        # Deployments by model
+        model_counts_result = await db.execute(
+            select(
+                ModelDeployment.model_name,
+                func.count(ModelDeployment.id).label("count")
+            )
+            .group_by(ModelDeployment.model_name)
+            .order_by(func.count(ModelDeployment.id).desc())
+        )
+        model_counts = {row[0]: row[1] for row in model_counts_result.all()}
+
+        # Current active model
+        active_model = await get_active_model()
+
+        # Most recent deployment
+        recent_result = await db.execute(
+            select(ModelDeployment)
+            .order_by(ModelDeployment.deployed_at.desc())
+            .limit(1)
+        )
+        recent = recent_result.scalar_one_or_none()
+
+        return {
+            "total_deployments": total_deployments,
+            "active_model": active_model,
+            "deployments_by_model": model_counts,
+            "most_recent_deployment": {
+                "model_name": recent.model_name,
+                "deployed_at": recent.deployed_at.isoformat() if recent and recent.deployed_at else None,
+                "deployed_by": recent.deployed_by if recent else None,
+            } if recent else None,
+        }

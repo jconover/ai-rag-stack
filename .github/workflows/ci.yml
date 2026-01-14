@@ -203,6 +203,80 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ============================================================================
+  # RAG Pipeline Integration Tests
+  # ============================================================================
+  rag-integration-test:
+    name: RAG Pipeline Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports:
+          - 6333:6333
+          - 6334:6334
+        options: >-
+          --health-cmd "timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/6333'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      QDRANT_HOST: localhost
+      QDRANT_PORT: 6333
+      QDRANT_GRPC_PORT: 6334
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      EMBEDDING_MODEL: BAAI/bge-base-en-v1.5
+      EMBEDDING_DIMENSION: 768
+      HYBRID_SEARCH_ENABLED: false
+      RERANKER_ENABLED: false
+      HYDE_ENABLED: false
+      WEB_SEARCH_ENABLED: false
+      AUTH_ENABLED: false
+      QUERY_LOGGING_ENABLED: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Install CPU-only torch to avoid large CUDA download
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for Qdrant..."
+          timeout 30 bash -c 'until curl -s http://localhost:6333/collections > /dev/null; do sleep 1; done'
+          echo "Qdrant is ready"
+          echo "Waiting for Redis..."
+          timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; do sleep 1; done'
+          echo "Redis is ready"
+
+      - name: Run RAG validation tests
+        run: |
+          pytest tests/test_rag_validation.py -v --tb=short -x
+        timeout-minutes: 10
+
+  # ============================================================================
   # Security Scanning
   # ============================================================================
   security-scan:
@@ -239,6 +313,7 @@ jobs:
       - frontend-test
       - docker-build
       - security-scan
+      - rag-integration-test
     if: always()
     steps:
       - name: Check all job statuses
@@ -251,6 +326,7 @@ jobs:
           FRONTEND_TEST: ${{ needs.frontend-test.result }}
           DOCKER_BUILD: ${{ needs.docker-build.result }}
           SECURITY_SCAN: ${{ needs.security-scan.result }}
+          RAG_INTEGRATION: ${{ needs.rag-integration-test.result }}
         run: |
           echo "Backend Lint: $BACKEND_LINT"
           echo "Backend Type Check: $BACKEND_TYPECHECK"
@@ -260,11 +336,13 @@ jobs:
           echo "Frontend Test: $FRONTEND_TEST"
           echo "Docker Build: $DOCKER_BUILD"
           echo "Security Scan: $SECURITY_SCAN"
+          echo "RAG Integration: $RAG_INTEGRATION"
 
           # Fail if any required job failed
           if [[ "$BACKEND_LINT" == "failure" ]] || \
              [[ "$FRONTEND_BUILD" == "failure" ]] || \
-             [[ "$DOCKER_BUILD" == "failure" ]]; then
+             [[ "$DOCKER_BUILD" == "failure" ]] || \
+             [[ "$RAG_INTEGRATION" == "failure" ]]; then
             echo "Required jobs failed!"
             exit 1
           fi

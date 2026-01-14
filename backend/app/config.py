@@ -101,8 +101,22 @@ class Settings(BaseSettings):
     conversation_context_min_query_length: int = int(os.getenv("CONVERSATION_CONTEXT_MIN_QUERY_LENGTH", "5"))
     conversation_context_max_terms: int = int(os.getenv("CONVERSATION_CONTEXT_MAX_TERMS", "10"))
 
+    # Conversation Summarization - tiered storage with automatic summarization
+    conversation_summarization_enabled: bool = os.getenv("CONVERSATION_SUMMARIZATION_ENABLED", "false").lower() == "true"
+    conversation_summary_threshold: int = int(os.getenv("CONVERSATION_SUMMARY_THRESHOLD", "10"))  # Messages before summarizing
+    conversation_summary_ttl: int = int(os.getenv("CONVERSATION_SUMMARY_TTL", str(7 * 24 * 3600)))  # 7 days default
+    conversation_recent_ttl: int = int(os.getenv("CONVERSATION_RECENT_TTL", str(24 * 3600)))  # 24 hours default
+    conversation_recent_to_keep: int = int(os.getenv("CONVERSATION_RECENT_TO_KEEP", "5"))  # Messages to keep after summarizing
+
     # Few-shot learning - include domain-specific examples to improve output consistency and formatting
     few_shot_enabled: bool = os.getenv("FEW_SHOT_ENABLED", "true").lower() == "true"
+
+    # Chain-of-thought prompting - inject reasoning scaffolding for complex queries
+    chain_of_thought_enabled: bool = os.getenv("CHAIN_OF_THOUGHT_ENABLED", "true").lower() == "true"
+
+    # Context Compression - extract query-relevant passages to reduce noise and improve context quality
+    context_compression_enabled: bool = os.getenv("CONTEXT_COMPRESSION_ENABLED", "false").lower() == "true"
+    context_compression_use_llm: bool = os.getenv("CONTEXT_COMPRESSION_USE_LLM", "false").lower() == "true"
 
     # Web Search Fallback (Tavily) - triggers when local retrieval scores are low
     web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
@@ -178,6 +192,11 @@ class Settings(BaseSettings):
     analytics_long_window_seconds: int = int(os.getenv("ANALYTICS_LONG_WINDOW_SECONDS", 3600))  # 1 hour
     analytics_endpoint_protected: bool = os.getenv("ANALYTICS_ENDPOINT_PROTECTED", "false").lower() == "true"
     analytics_api_key: str = os.getenv("ANALYTICS_API_KEY", "")
+
+    # Semantic Response Cache - caches LLM responses based on semantic similarity
+    semantic_cache_enabled: bool = os.getenv("SEMANTIC_CACHE_ENABLED", "false").lower() == "true"
+    semantic_cache_threshold: float = float(os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.92"))  # Similarity threshold for cache hits
+    semantic_cache_ttl: int = int(os.getenv("SEMANTIC_CACHE_TTL", "3600"))  # Cache TTL in seconds (default: 1 hour)
 
     @property
     def postgres_url(self) -> str:

@@ -10,6 +10,7 @@ This module defines the database schema for:
 - Experiment: A/B testing experiment configuration
 - ExperimentAssignment: User assignments to experiment variants
 - ExperimentResult: Metrics collected from experiment variants
+- ModelDeployment: Track deployed model versions for analytics and rollback
 
 Tables use proper indexing for common query patterns:
 - Date range queries for analytics
@@ -18,6 +19,7 @@ Tables use proper indexing for common query patterns:
 - File path lookups for ingestion tracking
 - Experiment variant analysis
 - User authentication and authorization
+- Model deployment history tracking
 """
 
 import uuid
@@ -912,6 +914,87 @@ class ExperimentAssignment(Base):
 
     def __repr__(self) -> str:
         return f"<ExperimentAssignment(experiment={self.experiment_id}, session={self.session_id[:8]}..., variant={self.variant_id})>"
+
+
+class ModelDeployment(Base):
+    """Track deployed model versions for analytics and rollback.
+
+    Records model deployment history for:
+    - Version tracking and audit trail
+    - Performance metrics at deployment time
+    - Rollback capability to previous versions
+    - Deployment analytics and trends
+
+    Only one model should be active at a time. When a new model is deployed,
+    previous deployments are automatically deactivated.
+    """
+
+    __tablename__ = "model_deployments"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+        comment="Unique deployment identifier",
+    )
+    model_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Model name and version (e.g., llama3.1:8b, mistral:7b)",
+    )
+    deployed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="Deployment timestamp",
+    )
+    deployed_by: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="User or system that initiated the deployment",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+        comment="Whether this is the currently active model",
+    )
+    notes: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Deployment notes or changelog",
+    )
+
+    # Performance metrics at deployment time (optional)
+    avg_latency_ms: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Average latency in milliseconds at deployment time",
+    )
+    avg_tokens_per_second: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Average token generation rate at deployment time",
+    )
+
+    # Additional deployment metadata
+    deployment_config: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Additional deployment configuration (temperature, context length, etc.)",
+    )
+
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        Index("ix_model_deployments_active_deployed", "is_active", "deployed_at"),
+        Index("ix_model_deployments_model_deployed", "model_name", "deployed_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ModelDeployment(id={self.id}, model={self.model_name}, active={self.is_active})>"
 
 
 class ExperimentResult(Base):

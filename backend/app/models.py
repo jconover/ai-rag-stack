@@ -1,6 +1,10 @@
 """Pydantic models for API requests and responses"""
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Maximum query length to prevent OOM in embedding/LLM
+# Used by ChatRequest validator and main.py's validate_query_length function
+MAX_QUERY_LENGTH = 8000
 
 
 class ChatRequest(BaseModel):
@@ -10,6 +14,14 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Temperature for generation")
     max_tokens: Optional[int] = Field(2048, ge=1, le=8192, description="Maximum tokens to generate")
     use_rag: Optional[bool] = Field(True, description="Whether to use RAG for context")
+
+    @field_validator('message')
+    @classmethod
+    def validate_message_length(cls, v: str) -> str:
+        """Validate message length to prevent resource exhaustion attacks."""
+        if len(v) > MAX_QUERY_LENGTH:
+            raise ValueError(f'Message too long. Maximum {MAX_QUERY_LENGTH} characters, got {len(v)}.')
+        return v
 
 
 class SourceDocument(BaseModel):
@@ -711,3 +723,24 @@ class SetBaselineResponse(BaseModel):
     success: bool = Field(..., description="Whether baseline was set successfully")
     message: str = Field(..., description="Status message")
     baseline: Optional[DriftMetricsResponse] = Field(None, description="The baseline metrics that were set")
+
+
+# Documentation Freshness Models
+
+class SourceFreshnessModel(BaseModel):
+    """Freshness status for a documentation source"""
+    source_type: str = Field(..., description="Documentation source type (e.g., kubernetes, terraform)")
+    last_download: Optional[str] = Field(None, description="ISO timestamp of last download")
+    last_commit_date: Optional[str] = Field(None, description="ISO timestamp of last git commit")
+    days_since_update: int = Field(..., description="Days since last update (-1 if unknown)")
+    staleness_risk: str = Field(..., description="Risk level: fresh, low, medium, high, or unknown")
+    recommended_action: str = Field(..., description="Recommended action to take")
+
+
+class FreshnessReportResponse(BaseModel):
+    """Response containing documentation freshness report"""
+    sources: List[SourceFreshnessModel] = Field(..., description="Freshness status for all tracked sources")
+    total_sources: int = Field(..., description="Total number of tracked sources")
+    stale_count: int = Field(..., description="Number of sources with medium or higher staleness")
+    fresh_count: int = Field(..., description="Number of fresh sources")
+    generated_at: str = Field(..., description="ISO timestamp when report was generated")

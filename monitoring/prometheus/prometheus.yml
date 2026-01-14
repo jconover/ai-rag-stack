@@ -22,3 +22,13 @@ scrape_configs:
     static_configs:
       - targets: ['backend:8000']
     metrics_path: '/metrics/'
+
+  # NVIDIA GPU metrics from dcgm-exporter (optional - requires gpu-monitoring profile)
+  # Enable with: docker compose --profile gpu-monitoring up -d
+  - job_name: 'dcgm-exporter'
+    static_configs:
+      - targets: ['dcgm-exporter:9400']
+    # Scrape GPU metrics every 15 seconds
+    scrape_interval: 15s
+    # Honor labels from DCGM to preserve GPU identification
+    honor_labels: true
