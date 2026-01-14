@@ -75,6 +75,7 @@ Frontend (React:3000) → Backend (FastAPI:8000) → Ollama (LLM:11434)
 | `backend/app/query_expansion.py` | HyDE query expansion |
 | `backend/app/conversation_context.py` | Conversation-aware query expansion for follow-ups |
 | `backend/app/web_search.py` | Tavily web search fallback |
+| `backend/app/semantic_cache.py` | Semantic response caching for similar queries |
 | `backend/app/config.py` | Environment configuration (reads `.env`) |
 | `scripts/ingest_docs.py` | Document ingestion pipeline |
 | `scripts/download_docs.sh` | Git clone documentation repos |
@@ -116,6 +117,9 @@ Markdown/Text → LangChain DirectoryLoader → RecursiveCharacterTextSplitter
 - `TAVILY_API_KEY=tvly-xxx` - Tavily API key (free: 1,000/month)
 - `WEB_SEARCH_MIN_SCORE_THRESHOLD=0.4` - Trigger web search below this score
 - `WEB_SEARCH_INCLUDE_DOMAINS=docs.aws.amazon.com,kubernetes.io` - Trusted domains
+- `SEMANTIC_CACHE_ENABLED=true` - Enable semantic response caching
+- `SEMANTIC_CACHE_THRESHOLD=0.92` - Similarity threshold for cache hits (0-1)
+- `SEMANTIC_CACHE_TTL=3600` - Cache entry TTL in seconds (default: 1 hour)
 
 ### Docker
 - **Production**: `docker-compose.yml` (Docker Hub images)
