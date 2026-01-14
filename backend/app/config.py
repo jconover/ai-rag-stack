@@ -1,7 +1,15 @@
-"""Configuration management"""
+"""Configuration management with validation.
+
+This module provides centralized configuration with:
+- Environment variable loading
+- Pydantic validation for interdependent settings
+- Security checks for production deployments
+"""
 import os
 import warnings
+from typing import Any
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 
 
 # List of known weak/default passwords that should not be used in production
@@ -198,6 +206,93 @@ class Settings(BaseSettings):
     semantic_cache_threshold: float = float(os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.92"))  # Similarity threshold for cache hits
     semantic_cache_ttl: int = int(os.getenv("SEMANTIC_CACHE_TTL", "3600"))  # Cache TTL in seconds (default: 1 hour)
 
+    @model_validator(mode='after')
+    def validate_interdependent_settings(self) -> 'Settings':
+        """Validate interdependent configuration settings."""
+        errors = []
+
+        # Validate reranker_top_k <= retrieval_top_k
+        if self.reranker_enabled and self.reranker_top_k > self.retrieval_top_k:
+            errors.append(
+                f"reranker_top_k ({self.reranker_top_k}) cannot exceed "
+                f"retrieval_top_k ({self.retrieval_top_k})"
+            )
+
+        # Validate reranker_top_k <= top_k_results makes sense
+        if self.reranker_enabled and self.reranker_top_k > self.top_k_results * 4:
+            warnings.warn(
+                f"reranker_top_k ({self.reranker_top_k}) is much larger than "
+                f"top_k_results ({self.top_k_results}). Consider reducing reranker_top_k.",
+                UserWarning
+            )
+
+        # Validate score thresholds are in valid range
+        if not 0.0 <= self.min_similarity_score <= 1.0:
+            errors.append(
+                f"min_similarity_score ({self.min_similarity_score}) must be between 0.0 and 1.0"
+            )
+
+        if not -10.0 <= self.min_rerank_score <= 10.0:
+            errors.append(
+                f"min_rerank_score ({self.min_rerank_score}) must be between -10.0 and 10.0"
+            )
+
+        # Validate semantic cache threshold
+        if not 0.0 <= self.semantic_cache_threshold <= 1.0:
+            errors.append(
+                f"semantic_cache_threshold ({self.semantic_cache_threshold}) must be between 0.0 and 1.0"
+            )
+
+        # Validate embedding dimension matches common models
+        known_dimensions = {
+            'bge-base': 768,
+            'bge-small': 384,
+            'bge-large': 1024,
+            'all-MiniLM-L6': 384,
+            'all-mpnet-base': 768,
+        }
+        model_lower = self.embedding_model.lower()
+        for model_key, expected_dim in known_dimensions.items():
+            if model_key in model_lower and self.embedding_dimension != expected_dim:
+                warnings.warn(
+                    f"embedding_dimension ({self.embedding_dimension}) may not match "
+                    f"model {self.embedding_model} (expected {expected_dim})",
+                    UserWarning
+                )
+                break
+
+        # Validate chunk_overlap < chunk_size
+        if self.chunk_overlap >= self.chunk_size:
+            errors.append(
+                f"chunk_overlap ({self.chunk_overlap}) must be less than "
+                f"chunk_size ({self.chunk_size})"
+            )
+
+        # Validate HyDE query length bounds
+        if self.hyde_enabled and self.hyde_min_query_length >= self.hyde_max_query_length:
+            errors.append(
+                f"hyde_min_query_length ({self.hyde_min_query_length}) must be less than "
+                f"hyde_max_query_length ({self.hyde_max_query_length})"
+            )
+
+        # Validate tracing sample rate
+        if not 0.0 <= self.tracing_sample_rate <= 1.0:
+            errors.append(
+                f"tracing_sample_rate ({self.tracing_sample_rate}) must be between 0.0 and 1.0"
+            )
+
+        # Validate hybrid search alpha
+        if not 0.0 <= self.hybrid_search_alpha <= 1.0:
+            errors.append(
+                f"hybrid_search_alpha ({self.hybrid_search_alpha}) must be between 0.0 and 1.0"
+            )
+
+        # Raise all validation errors together
+        if errors:
+            raise ValueError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+        return self
+
     @property
     def postgres_url(self) -> str:
         """Construct PostgreSQL async connection URL for asyncpg driver"""
@@ -212,7 +307,7 @@ class Settings(BaseSettings):
         if not self.cors_origins:
             return ["http://localhost:3000"]
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-    
+
     class Config:
         env_file = ".env"
 
