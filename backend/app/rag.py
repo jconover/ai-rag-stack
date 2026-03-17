@@ -1432,6 +1432,7 @@ Question: {query}{cot_scaffold}"""
             model = model or self.default_model
             retrieval_result = RetrievalResult()
             context_str = ""
+            retrieval_error = False
 
             # Retrieve relevant context if RAG is enabled (async to avoid blocking event loop)
             if use_rag:
@@ -1447,6 +1448,7 @@ Question: {query}{cot_scaffold}"""
                 except Exception as e:
                     logger.error("Error retrieving context: %s", e)
                     query_span.record_exception(e)
+                    retrieval_error = True
 
             # Build messages with proper system/user separation (model-specific prompt)
             messages = self._build_messages(query, context_str, model)
@@ -1498,6 +1500,7 @@ Question: {query}{cot_scaffold}"""
                     'context_used': bool(retrieval_result.documents) or bool(retrieval_result.web_search_context),
                     'sources': sources_list,
                     'reranker_enabled': settings.reranker_enabled,
+                    'retrieval_error': retrieval_error,
                 }
 
                 # Validate the response for hallucinations and quality issues (if enabled)
@@ -1521,13 +1524,12 @@ Question: {query}{cot_scaffold}"""
 
                 return result
 
-            except CircuitBreakerOpen as e:
-                # Provide user-friendly error for circuit breaker open
-                query_span.record_exception(e)
-                raise Exception(get_service_unavailable_message(e))
+            except CircuitBreakerOpen:
+                # Preserve for proper 503 handling upstream
+                raise
             except Exception as e:
                 query_span.record_exception(e)
-                raise Exception("Error generating response: {}".format(str(e)))
+                raise RuntimeError("Error generating response: {}".format(str(e))) from e
     
     def list_models(self) -> List[Dict[str, Any]]:
         """List available Ollama models with circuit breaker protection."""
@@ -1555,7 +1557,8 @@ Question: {query}{cot_scaffold}"""
         try:
             ollama.list()
             return True
-        except:
+        except Exception:
+            logger.debug("Ollama connectivity check failed")
             return False
 
     def _run_ollama_stream(
@@ -1659,6 +1662,7 @@ Question: {query}{cot_scaffold}"""
         model = model or self.default_model
         retrieval_result = RetrievalResult()
         context_str = ""
+        retrieval_error = False
 
         # Create parent span for streaming query (note: spans don't work well with async generators,
         # so we create events instead of nested spans for streaming)
@@ -1682,6 +1686,7 @@ Question: {query}{cot_scaffold}"""
                 except Exception as e:
                     logger.error("Error retrieving context: %s", e)
                     query_span.record_exception(e)
+                    retrieval_error = True
 
             # Build messages with proper system/user separation (model-specific prompt)
             messages = self._build_messages(query, context_str, model)
@@ -1698,6 +1703,7 @@ Question: {query}{cot_scaffold}"""
                 if retrieval_result.documents else None
             ),
             'reranker_enabled': settings.reranker_enabled,
+            'retrieval_error': retrieval_error,
         }
 
         # Include retrieval metrics if enabled

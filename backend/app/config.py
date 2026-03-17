@@ -324,8 +324,7 @@ def validate_security_settings(settings_obj: Settings) -> None:
     if settings_obj.postgres_password in WEAK_PASSWORDS:
         warnings.warn(
             "SECURITY WARNING: Default or weak PostgreSQL password detected. "
-            f"Password '{settings_obj.postgres_password}' is not secure. "
-            "Set POSTGRES_PASSWORD to a secure value in production.",
+            "Change POSTGRES_PASSWORD for production use.",
             UserWarning,
             stacklevel=2
         )

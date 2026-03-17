@@ -568,8 +568,8 @@ class SemanticResponseCache:
         if self._redis_client is not None:
             try:
                 total_entries = self._redis_client.scard(self.INDEX_KEY) or 0
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Connection check failed: {e}")
 
         self._stats.total_entries = total_entries
 
@@ -596,7 +596,8 @@ class SemanticResponseCache:
         try:
             self._redis_client.ping()
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Connection check failed: {e}")
             return False
 
 

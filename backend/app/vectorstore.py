@@ -342,7 +342,8 @@ class RedisEmbeddingCache:
         try:
             self._redis_client.ping()
             return True
-        except:
+        except Exception as e:
+            logger.debug(f"Connection check failed: {e}")
             return False
 
 
@@ -1487,7 +1488,8 @@ class VectorStore:
         try:
             self.client.get_collections()
             return True
-        except:
+        except Exception as e:
+            logger.debug(f"Connection check failed: {e}")
             return False
 
     def optimize_collection(self) -> Dict[str, Any]:

@@ -53,6 +53,8 @@ data/docs/
 data/custom/
 data/logs/
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 
 # Docker
@@ -66,9 +68,14 @@ models/
 .aider.chat.history*.md
 .aider.input.history
 .aider.tags.cache.v3/
+.aider.tags.cache.v4/
 
 # Claude Code (keep agents, ignore personal settings)
 .claude/settings.local.json
 .claude/*
 .claude/*/*
+
+# Session artifacts (ephemeral, developer-local)
+SESSION_SUMMARY.md
+YOUR_SYSTEM_STATUS.md
 

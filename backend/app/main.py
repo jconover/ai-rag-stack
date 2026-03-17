@@ -490,7 +490,7 @@ def save_message(session_id: str, role: str, content: str):
             pipe.expire(history_key, 86400)  # 24 hour expiry
             pipe.execute()
     except Exception as e:
-        print(f"Error saving message: {e}")
+        logger.error(f"Error saving message: {e}")
 
 
 async def check_and_trigger_summarization(session_id: str):
@@ -1775,9 +1775,27 @@ async def upload_documents(
                 })
                 continue
 
-            # Save file
-            file_path = custom_docs_dir / file.filename
+            # Sanitize filename to prevent path traversal attacks.
+            # Using Path(...).name strips any directory components (e.g. "../../etc/passwd"
+            # becomes "passwd"), then we resolve and verify the final path stays within
+            # custom_docs_dir before writing.
+            safe_name = Path(file.filename).name
+            file_path = (custom_docs_dir / safe_name).resolve()
+            if not str(file_path).startswith(str(custom_docs_dir.resolve())):
+                failed_files.append({
+                    "filename": file.filename,
+                    "error": "Invalid filename: path traversal detected"
+                })
+                continue
+
+            # Enforce a 50 MB file size limit before writing to disk.
+            MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
             content = await file.read()
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File '{safe_name}' exceeds the 50 MB size limit ({len(content)} bytes)"
+                )
 
             with open(file_path, 'wb') as f:
                 f.write(content)
