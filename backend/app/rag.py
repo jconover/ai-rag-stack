@@ -22,6 +22,7 @@ import ollama
 from app.config import settings
 from app.vectorstore import vector_store
 from app.reranker import rerank_documents, get_reranker
+from app.llm_provider import get_llm_provider
 from app.metrics import retrieval_metrics_logger, RetrievalTimer, RetrievalMetrics
 from app.query_expansion import hyde_expander
 from app.web_search import web_searcher
@@ -37,6 +38,27 @@ from app.tracing import get_tracer, create_span, SpanAttributes
 from app.drift_detection import drift_detector
 
 logger = logging.getLogger(__name__)
+
+
+def _split_messages_for_provider(messages: List[Dict[str, str]]) -> Tuple[Optional[str], str]:
+    """Split a chat ``messages`` list into (system, user_prompt) for the LLM provider.
+
+    Multiple user/assistant turns are concatenated; only the first system message
+    is honored. This keeps the provider interface simple (single prompt + system)
+    while supporting the existing ``_build_messages`` output.
+    """
+    system_parts: List[str] = []
+    user_parts: List[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content", "") or ""
+        if role == "system":
+            system_parts.append(content)
+        else:
+            user_parts.append(content)
+    system_text = "\n\n".join(p for p in system_parts if p) or None
+    user_text = "\n\n".join(p for p in user_parts if p)
+    return system_text, user_text
 
 
 # Complexity indicators for chain-of-thought prompting
@@ -1468,24 +1490,21 @@ Question: {query}{cot_scaffold}"""
 
                     llm_start = time_module.perf_counter()
 
-                    # Wrap the Ollama call with circuit breaker
-                    def _call_ollama():
-                        return ollama.chat(
-                            model=model,
-                            messages=messages,
-                            options={
-                                'temperature': temperature,
-                                'num_predict': max_tokens,
-                            }
-                        )
-
-                    response = ollama_circuit_breaker.call(_call_ollama)
+                    # Route through the pluggable LLM provider. For LLM_PROVIDER=ollama
+                    # (default), OllamaProvider wraps the identical ollama.chat() call
+                    # with the same options dict + circuit breaker, preserving behavior.
+                    system_text, user_text = _split_messages_for_provider(messages)
+                    provider = get_llm_provider()
+                    answer = await provider.complete(
+                        prompt=user_text,
+                        system=system_text,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
 
                     llm_time_ms = (time_module.perf_counter() - llm_start) * 1000
                     llm_span.set_attribute(SpanAttributes.LLM_TIME_MS, llm_time_ms)
-                    llm_span.set_attribute(SpanAttributes.LLM_RESPONSE_LENGTH, len(response['message']['content']))
-
-                answer = response['message']['content']
+                    llm_span.set_attribute(SpanAttributes.LLM_RESPONSE_LENGTH, len(answer))
 
                 # Build sources list for validation
                 sources_list = (
@@ -1713,62 +1732,44 @@ Question: {query}{cot_scaffold}"""
         # Yield metadata first
         yield metadata
 
-        # Generate streaming response using Ollama in a thread pool
-        # This prevents blocking the event loop
-        queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
+        # Stream tokens via the pluggable LLM provider (OllamaProvider preserves
+        # the original thread-pool + circuit breaker behavior; AnthropicProvider
+        # uses native async SSE streaming).
+        system_text, user_text = _split_messages_for_provider(messages)
+        provider = get_llm_provider()
 
-        # Run the synchronous Ollama streaming in a thread pool
-        thread_task = loop.run_in_executor(
-            None,  # Use default executor (ThreadPoolExecutor)
-            self._run_ollama_stream,
-            model,
-            messages,
-            temperature,
-            max_tokens,
-            queue,
-            loop,
-        )
-
-        # Consume chunks from the queue as they arrive, accumulating response for validation
-        accumulated_response = []
+        accumulated_response: List[str] = []
         try:
-            while True:
-                # Wait for next chunk from the thread, yielding control to event loop
-                chunk = await queue.get()
+            async for token in provider.stream(
+                prompt=user_text,
+                system=system_text,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                accumulated_response.append(token)
+                yield {'type': 'content', 'content': token}
 
-                if chunk['type'] == 'done':
-                    # Validate the complete response before signaling done (if enabled)
-                    if settings.output_validation_enabled:
-                        full_response = "".join(accumulated_response)
-                        sources_list = metadata.get('sources')
+            # Validate the complete response before signaling done (if enabled)
+            if settings.output_validation_enabled:
+                full_response = "".join(accumulated_response)
+                sources_list = metadata.get('sources')
 
-                        validation_result = self._validate_response(
-                            response=full_response,
-                            context=context_str,
-                            sources=sources_list,
-                            query=query
-                        )
+                validation_result = self._validate_response(
+                    response=full_response,
+                    context=context_str,
+                    sources=sources_list,
+                    query=query,
+                )
 
-                        # Yield validation results before done signal
-                        yield {
-                            'type': 'validation',
-                            'output_validation': validation_result.to_dict()
-                        }
+                yield {
+                    'type': 'validation',
+                    'output_validation': validation_result.to_dict(),
+                }
 
-                    yield chunk
-                    break
-                elif chunk['type'] == 'error':
-                    yield chunk
-                    break
-                else:
-                    # Accumulate content for validation
-                    if chunk.get('content'):
-                        accumulated_response.append(chunk['content'])
-                    yield chunk
-        finally:
-            # Ensure the thread task completes
-            await thread_task
+            yield {'type': 'done'}
+        except Exception as e:  # noqa: BLE001
+            logger.error("Streaming provider error: %s", e)
+            yield {'type': 'error', 'error': str(e)}
 
 
 # Singleton instance

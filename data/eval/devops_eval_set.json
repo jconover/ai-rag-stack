@@ -1,0 +1,62 @@
+[
+  {
+    "question": "How do I list all pods in a specific Kubernetes namespace?",
+    "answer": "Use `kubectl get pods -n <namespace>` to list all pods in a given namespace, or add `-o wide` for extra columns like node and IP.",
+    "ground_truth": "Run `kubectl get pods -n <namespace>` (or `--namespace <namespace>`) to list pods in that namespace. Use `kubectl get pods --all-namespaces` to see pods across every namespace.",
+    "topic": "kubernetes"
+  },
+  {
+    "question": "What is the difference between a Kubernetes Deployment and a StatefulSet?",
+    "answer": "A Deployment manages stateless replicas with interchangeable pods, while a StatefulSet gives each pod a stable identity, stable network hostname, and ordered rolling updates, which is needed for databases and other stateful workloads.",
+    "ground_truth": "Deployments are for stateless apps and treat pods as fungible; StatefulSets provide stable pod identities (ordinal names), stable persistent volume claims per replica, and ordered deployment/scaling, which is required for stateful systems like databases.",
+    "topic": "kubernetes"
+  },
+  {
+    "question": "How do I initialize a new Terraform working directory?",
+    "answer": "Run `terraform init` in the directory containing your .tf files. It downloads providers, configures the backend, and installs any referenced modules.",
+    "ground_truth": "`terraform init` initializes a working directory: it downloads required providers, installs modules, and configures the backend. Re-run it with `-upgrade` to update providers or `-reconfigure` when backend settings change.",
+    "topic": "terraform"
+  },
+  {
+    "question": "How can I preview Terraform changes before applying them?",
+    "answer": "Run `terraform plan` to see the changes Terraform would make, or `terraform plan -out=tfplan` to save a plan file you can later apply with `terraform apply tfplan`.",
+    "ground_truth": "Use `terraform plan` to generate an execution plan showing adds/changes/deletes without modifying infrastructure. Save it with `-out=<file>` and apply the exact plan with `terraform apply <file>`.",
+    "topic": "terraform"
+  },
+  {
+    "question": "How do I run an Ansible playbook against a specific inventory file?",
+    "answer": "Use `ansible-playbook -i <inventory> <playbook.yml>`. Add `--check` for a dry run and `-e 'key=value'` to pass extra variables.",
+    "ground_truth": "Run `ansible-playbook -i <inventory_path> <playbook.yml>`. The `-i` flag selects the inventory. Use `--check` for a dry run and `-e` for extra variables.",
+    "topic": "ansible"
+  },
+  {
+    "question": "What is the purpose of Ansible roles?",
+    "answer": "Roles package related tasks, handlers, templates, files, and variables into a reusable directory structure so playbooks stay small and behavior can be shared across projects.",
+    "ground_truth": "Ansible roles are a standard directory layout (tasks/, handlers/, templates/, files/, vars/, defaults/, meta/) that groups related automation into a reusable, shareable unit consumed from a playbook's `roles:` list.",
+    "topic": "ansible"
+  },
+  {
+    "question": "How do I build a Docker image from a Dockerfile with a tag?",
+    "answer": "Run `docker build -t <name>:<tag> .` from the directory containing the Dockerfile, or `-f <path>` to point at a different Dockerfile.",
+    "ground_truth": "Use `docker build -t <name>:<tag> <context>` (commonly `.`). The `-t` flag tags the resulting image; `-f` selects a non-default Dockerfile path.",
+    "topic": "docker"
+  },
+  {
+    "question": "What is the difference between COPY and ADD in a Dockerfile?",
+    "answer": "Both copy files into an image, but ADD additionally supports auto-extracting local tar archives and fetching remote URLs. Best practice is to prefer COPY unless you specifically need ADD's extra behaviors.",
+    "ground_truth": "COPY copies local files/directories into the image. ADD does the same plus auto-extracts recognized tar archives and supports remote URLs. Docker's guidance is to prefer COPY unless you need ADD's archive expansion or URL fetching.",
+    "topic": "docker"
+  },
+  {
+    "question": "How do I check the logs of a Kubernetes pod that has restarted?",
+    "answer": "Use `kubectl logs <pod> --previous` to view logs from the previous container instance. Combine with `-c <container>` for multi-container pods.",
+    "ground_truth": "Run `kubectl logs <pod> --previous` (or `-p`) to see the crashed container's prior logs. For multi-container pods use `-c <container>`.",
+    "topic": "kubernetes"
+  },
+  {
+    "question": "How do I remove all stopped Docker containers and unused images in one command?",
+    "answer": "Run `docker system prune` to remove stopped containers, unused networks, dangling images, and build cache. Add `-a` to also remove unused images (not just dangling) and `--volumes` to prune anonymous volumes.",
+    "ground_truth": "`docker system prune` removes stopped containers, dangling images, unused networks, and build cache. `docker system prune -a --volumes` additionally removes all unused images and anonymous volumes.",
+    "topic": "docker"
+  }
+]

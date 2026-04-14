@@ -22,6 +22,13 @@ langchain-core>=0.1.0
 langchain-text-splitters>=0.0.1
 ollama>=0.1.6
 
+# Multi-provider LLM layer
+anthropic>=0.40.0
+
+# RAG evaluation (agentic RAG + /api/eval/run)
+ragas>=0.2.0
+datasets>=2.16.0
+
 # Phase 2: Semantic chunking support
 langchain-experimental>=0.0.50
 

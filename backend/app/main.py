@@ -3843,6 +3843,86 @@ async def revoke_api_key_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Agentic RAG endpoint (PLAN -> RETRIEVE -> REFLECT -> DECIDE -> GENERATE -> VERIFY)
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _AgentBaseModel
+
+
+class AgentChatRequest(_AgentBaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+
+
+@app.post("/api/agent/chat")
+@limiter.limit("30/minute")
+async def agent_chat(agent_request: AgentChatRequest, request: Request):
+    """Run the Agentic RAG loop for a single query.
+
+    Returns the generated answer, cited sources, a full step-by-step
+    ``agent_trace``, and metadata including retry count and verifier
+    outcome. Does not touch the classic ``/api/chat`` path.
+    """
+    from app.agent import get_agentic_rag
+
+    validated_query = validate_query_length(agent_request.message)
+    try:
+        agent = get_agentic_rag()
+        result = await agent.run(
+            query=validated_query,
+            conversation_id=agent_request.conversation_id,
+        )
+        return result
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Agentic RAG failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# RAG scoring endpoint (RAGAS)
+# ---------------------------------------------------------------------------
+class EvalRunRequest(_AgentBaseModel):
+    question: str
+    answer: str
+    contexts: List[str]
+    ground_truth: Optional[str] = None
+
+
+@app.post("/api/eval/run")
+async def run_eval_scoring(req: EvalRunRequest):
+    """Score a single sample with RAGAS.
+
+    Metrics returned: faithfulness, answer_relevancy, context_precision,
+    and context_recall (if ground_truth is provided). The record is also
+    upserted into the ``eval_results`` Qdrant collection.
+    """
+    from app.rag_eval import run_ragas_scoring, build_eval_record
+
+    try:
+        metrics = run_ragas_scoring(
+            question=req.question,
+            answer=req.answer,
+            contexts=req.contexts,
+            ground_truth=req.ground_truth,
+        )
+        record = build_eval_record(
+            question=req.question,
+            answer=req.answer,
+            contexts=req.contexts,
+            ground_truth=req.ground_truth,
+            metrics=metrics,
+        )
+        point_id = vector_store.store_eval_result(record)
+        return {
+            "metrics": metrics,
+            "stored_id": point_id,
+            "collection": vector_store.EVAL_COLLECTION_NAME,
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("run_eval_scoring failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Optional Prometheus metrics endpoint
 if ENABLE_PROMETHEUS:
     try:

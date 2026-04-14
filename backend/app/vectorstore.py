@@ -1686,6 +1686,66 @@ class VectorStore:
             logger.error(f"Error getting sources for {source_type}: {e}")
             return []
 
+    # ------------------------------------------------------------------
+    # Evaluation results collection (used by /api/eval/run)
+    # ------------------------------------------------------------------
+    EVAL_COLLECTION_NAME = "eval_results"
+
+    def ensure_eval_collection(self) -> None:
+        """Lazily create the ``eval_results`` collection if missing.
+
+        Uses the same embedding dimension as the primary docs collection
+        so that we can store the embedded question as the vector and
+        search evaluations by semantic similarity later.
+        """
+        try:
+            collections = {c.name for c in self.client.get_collections().collections}
+            if self.EVAL_COLLECTION_NAME in collections:
+                return
+            self.client.create_collection(
+                collection_name=self.EVAL_COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=settings.embedding_dimension,
+                    distance=Distance.COSINE,
+                ),
+            )
+            logger.info("Created Qdrant collection '%s'", self.EVAL_COLLECTION_NAME)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ensure_eval_collection failed: %s", e)
+
+    def store_eval_result(self, record: Dict[str, Any]) -> Optional[str]:
+        """Upsert an evaluation record keyed by question embedding.
+
+        The ``record`` dict is stored as-is in the point payload. Returns
+        the generated point id on success, ``None`` on failure.
+        """
+        import uuid as _uuid
+        try:
+            self.ensure_eval_collection()
+            question = record.get("question", "") or ""
+            vector = self.embeddings.embed_query(question)
+            point_id = str(_uuid.uuid4())
+            self.client.upsert(
+                collection_name=self.EVAL_COLLECTION_NAME,
+                points=[
+                    PointStruct(
+                        id=point_id,
+                        vector=vector,
+                        payload=record,
+                    )
+                ],
+            )
+            logger.info(
+                "Stored eval result %s in '%s' (metrics=%s)",
+                point_id,
+                self.EVAL_COLLECTION_NAME,
+                record.get("metrics"),
+            )
+            return point_id
+        except Exception as e:  # noqa: BLE001
+            logger.error("store_eval_result failed: %s", e)
+            return None
+
 
 # Singleton instance
 vector_store = VectorStore()

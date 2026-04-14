@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # Ollama
     ollama_host: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     ollama_default_model: str = os.getenv("OLLAMA_DEFAULT_MODEL", "llama3.1:8b")
+
+    # Multi-provider LLM layer
+    # LLM_PROVIDER selects which backend the LLMProvider factory returns.
+    # Options: "ollama" (default, local) or "anthropic" (Claude API).
+    llm_provider: str = os.getenv("LLM_PROVIDER", "ollama")
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
     
     # Qdrant
     qdrant_host: str = os.getenv("QDRANT_HOST", "localhost")

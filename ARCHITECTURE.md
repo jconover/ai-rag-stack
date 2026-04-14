@@ -420,3 +420,119 @@ GPU Compute: 70-90%
 4. **Agent Mode**: Tool use, web search integration
 5. **Caching**: Cache common queries
 6. **A/B Testing**: Compare different models/prompts
+
+---
+
+## Agentic RAG Loop
+
+Endpoint: `POST /api/agent/chat`
+Implementation: `backend/app/agent.py` (`AgenticRAG.run`)
+
+```
+User Query
+    │
+    ▼
+┌──────────────────────────────────────────────────────────────┐
+│  PLAN                                                         │
+│  LLM decides: 1 retrieval or N sub-queries?                   │
+│  Output: sub_queries: ["q1", "q2", ...]                       │
+└─────────────────────┬────────────────────────────────────────┘
+                      │  for each sub_query
+                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  RETRIEVE                                                     │
+│  Reuses existing hybrid search + HyDE + reranker + web       │
+│  Output: Document chunks with similarity scores               │
+└─────────────────────┬────────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  REFLECT                                                      │
+│  LLM grades each chunk 0-1 vs original query (JSON output)    │
+│  Output: Drop chunks with score < 0.5                         │
+└─────────────────────┬────────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  DECIDE                                                       │
+│  surviving chunks >= 2?                                       │
+│    YES ──────────────────────────────────────────────► next  │
+│    NO  ──► rewrite query ──► back to RETRIEVE                 │
+│            (max 2 retries total)       ▲                      │
+│            ◄───────────────────────────┘                      │
+└─────────────────────┬────────────────────────────────────────┘
+                      │  proceed
+                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  GENERATE                                                     │
+│  Build context from surviving chunks                          │
+│  LLM produces answer with inline citations [1], [2], ...      │
+└─────────────────────┬────────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  VERIFY                                                       │
+│  LLM: "Does this answer address the question?"                │
+│  Output: {"addresses": bool, "reason": str}                   │
+└─────────────────────┬────────────────────────────────────────┘
+                      │
+                      ▼
+      Response: {answer, sources, agent_trace, metadata}
+```
+
+**agent_trace** records every step (plan, retrieve, reflect, decide,
+generate, verify) and is returned to the caller for full transparency.
+**metadata** includes `retries` count and `verified` boolean.
+
+---
+
+## Evaluation Pipeline
+
+Endpoint: `POST /api/eval/run`
+Implementation: `backend/app/rag_eval.py` + `VectorStore.store_eval_result`
+Dataset: `data/eval/devops_eval_set.json` (10 labelled DevOps Q&A samples)
+
+```
+POST /api/eval/run
+  { question, answer, contexts[], ground_truth? }
+            │
+            ▼
+┌───────────────────────────────────┐
+│  run_ragas_scoring()              │
+│                                   │
+│  ragas package available?         │
+│    YES ──► ragas.evaluate()  ─────┼──► faithfulness
+│    NO  ──► Jaccard heuristic ─────┼──► answer_relevancy
+│                                   │──► context_precision
+│  (fallback is automatic; no       │──► context_recall
+│   config needed for local use)    │    (if ground_truth)
+└────────────────┬──────────────────┘
+                 │  metrics dict
+                 ▼
+┌───────────────────────────────────────────────────────┐
+│  build_eval_record()                                   │
+│  { timestamp, question, answer, contexts,              │
+│    ground_truth, metrics }                             │
+└────────────────┬──────────────────────────────────────┘
+                 │
+                 ▼
+┌───────────────────────────────────────────────────────┐
+│  VectorStore.store_eval_result()                       │
+│                                                        │
+│  ensure_eval_collection()                              │
+│    └─► create Qdrant collection "eval_results"         │
+│        (lazily, skips if already exists)               │
+│  embed(question) ──► dense vector                      │
+│  upsert PointStruct { vector, payload: record }        │
+└────────────────┬──────────────────────────────────────┘
+                 │
+                 ▼
+  { metrics, stored_id, collection: "eval_results" }
+```
+
+**RAGAS fallback**: token-overlap (Jaccard) heuristic runs automatically
+when `ragas` is not installed or needs an OpenAI LLM key. The endpoint
+always returns scores.
+**eval_results collection**: each record is indexed by its question
+embedding so you can later search for semantically similar past
+evaluations via standard Qdrant similarity search.
