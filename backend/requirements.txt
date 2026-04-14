@@ -26,8 +26,13 @@ ollama>=0.1.6
 anthropic>=0.40.0
 
 # RAG evaluation (agentic RAG + /api/eval/run)
-ragas>=0.2.0
-datasets>=2.16.0
+# NOTE: ragas + datasets temporarily disabled — they pull langchain/pydantic/
+# huggingface_hub pins that conflict with this repo's existing stack and cause
+# pip's resolver to backtrack for hours. rag_eval.py has a Jaccard fallback
+# that kicks in automatically when ragas isn't importable, so /api/eval/run
+# still works. Re-enable once we pin compatible versions (see LEARNING_EXERCISES.md #4).
+# ragas>=0.2.0
+# datasets>=2.16.0
 
 # Phase 2: Semantic chunking support
 langchain-experimental>=0.0.50
