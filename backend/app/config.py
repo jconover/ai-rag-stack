@@ -82,7 +82,11 @@ class Settings(BaseSettings):
     reranker_device: str = os.getenv("RERANKER_DEVICE", "auto")
     reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", 5))  # Final results after reranking
     retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", 20))  # Initial retrieval before reranking
-    reranker_max_length: int = int(os.getenv("RERANKER_MAX_LENGTH", 1024))  # Max sequence length for cross-encoder
+    # Max sequence length for cross-encoder. MUST be <=512 for MiniLM-based models
+    # (e.g. cross-encoder/ms-marco-MiniLM-L-6-v2) because their BERT backbone only
+    # has 512 position embeddings. Setting it higher crashes at inference with
+    # "tensor a (N) must match tensor b (512) at non-singleton dimension 1".
+    reranker_max_length: int = int(os.getenv("RERANKER_MAX_LENGTH", 512))
 
     # Score thresholds for filtering low-quality results
     min_similarity_score: float = float(os.getenv("MIN_SIMILARITY_SCORE", 0.3))
