@@ -248,17 +248,19 @@ function App() {
                 metadata = data;
               } else if (data.type === 'content') {
                 fullResponse += data.content;
-                // Update the message in real-time
+                const currentResponse = fullResponse;
+                const currentMetadata = metadata;
+                // eslint-disable-next-line no-loop-func
                 setMessages((prev) => {
                   const newMessages = [...prev];
                   if (newMessages[messageIndex]?.role === 'assistant') {
-                    newMessages[messageIndex].content = fullResponse;
+                    newMessages[messageIndex].content = currentResponse;
                   } else {
                     newMessages.push({
                       role: 'assistant',
-                      content: fullResponse,
-                      sources: metadata?.sources,
-                      context_used: metadata?.context_used,
+                      content: currentResponse,
+                      sources: currentMetadata?.sources,
+                      context_used: currentMetadata?.context_used,
                     });
                   }
                   return newMessages;
