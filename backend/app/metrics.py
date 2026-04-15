@@ -19,13 +19,15 @@ import statistics
 import math
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from pathlib import Path
 import logging
 import os
 
 # Configure structured logger for retrieval metrics
-METRICS_LOG_PATH = os.getenv("RETRIEVAL_METRICS_LOG", "/data/logs/retrieval_metrics.jsonl")
+METRICS_LOG_PATH = os.getenv(
+    "RETRIEVAL_METRICS_LOG", "/data/logs/retrieval_metrics.jsonl"
+)
 ENABLE_PROMETHEUS = os.getenv("ENABLE_PROMETHEUS_METRICS", "false").lower() == "true"
 
 # Setup file handler for metrics logging
@@ -36,19 +38,21 @@ metrics_logger.propagate = False  # Prevent duplicate logging
 # Try to set up file handler, fall back to /tmp if permissions fail
 try:
     Path(METRICS_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode='a')
+    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode="a")
 except (PermissionError, OSError):
     # Fall back to /tmp if /data/logs is not writable
     METRICS_LOG_PATH = "/tmp/retrieval_metrics.jsonl"
-    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode='a')
-    logging.warning(f"Could not write to original path, using fallback: {METRICS_LOG_PATH}")
+    file_handler = logging.FileHandler(METRICS_LOG_PATH, mode="a")
+    logging.warning(
+        f"Could not write to original path, using fallback: {METRICS_LOG_PATH}"
+    )
 
-file_handler.setFormatter(logging.Formatter('%(message)s'))  # Raw JSON output
+file_handler.setFormatter(logging.Formatter("%(message)s"))  # Raw JSON output
 metrics_logger.addHandler(file_handler)
 
 # Console handler for development visibility
 console_handler = logging.StreamHandler()
-console_handler.setFormatter(logging.Formatter('[RETRIEVAL] %(message)s'))
+console_handler.setFormatter(logging.Formatter("[RETRIEVAL] %(message)s"))
 console_handler.setLevel(logging.DEBUG)
 metrics_logger.addHandler(console_handler)
 
@@ -67,6 +71,7 @@ class IRQualityMetrics:
         recall_at_k: Proportion of results with positive relevance signal
         precision_at_k: Proportion of results above quality threshold
     """
+
     ndcg_at_5: float = 0.0
     mrr: float = 0.0
     recall_at_k: float = 0.0
@@ -87,7 +92,9 @@ class IRQualityMetrics:
         for i, score in enumerate(scores[:k]):
             # Normalize score to [0, 1] range as relevance grade
             # Handle both positive [0, 1] scores and potentially negative scores
-            rel = max(0.0, min(1.0, score)) if score >= 0 else max(0.0, (score + 5) / 10)
+            rel = (
+                max(0.0, min(1.0, score)) if score >= 0 else max(0.0, (score + 5) / 10)
+            )
             dcg += rel / math.log2(i + 2)  # i+2 because position is 1-indexed
         return dcg
 
@@ -136,7 +143,7 @@ class IRQualityMetrics:
         cls,
         similarity_scores: List[float],
         rerank_scores: Optional[List[float]] = None,
-        k: int = 5
+        k: int = 5,
     ) -> "IRQualityMetrics":
         """Compute all IR metrics from retrieval scores.
 
@@ -170,6 +177,7 @@ class IRQualityMetrics:
 @dataclass
 class RetrievalMetrics:
     """Structured retrieval metrics data class."""
+
     timestamp: str
     query_hash: str
     query_preview: str  # First 100 chars of query for debugging
@@ -211,7 +219,7 @@ class RetrievalMetrics:
         latency_ms: float,
         score_threshold: Optional[float] = None,
         filtered_count: int = 0,
-        rerank_scores: Optional[List[float]] = None
+        rerank_scores: Optional[List[float]] = None,
     ) -> "RetrievalMetrics":
         """Create metrics from raw score data with computed statistics.
 
@@ -256,9 +264,7 @@ class RetrievalMetrics:
 
         # Compute IR quality metrics
         ir_quality = IRQualityMetrics.from_scores(
-            similarity_scores=scores,
-            rerank_scores=rerank_scores,
-            k=top_k
+            similarity_scores=scores, rerank_scores=rerank_scores, k=top_k
         )
 
         return cls(
@@ -274,7 +280,7 @@ class RetrievalMetrics:
             filtered_count=filtered_count,
             ir_metrics=ir_quality.to_dict(),
             **score_stats,
-            **buckets
+            **buckets,
         )
 
 
@@ -305,92 +311,90 @@ class RetrievalMetricsLogger:
             try:
                 # Retrieval score histogram
                 self.retrieval_score_histogram = Histogram(
-                    'rag_retrieval_score',
-                    'Distribution of retrieval similarity scores',
-                    ['model', 'top_k'],
-                    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+                    "rag_retrieval_score",
+                    "Distribution of retrieval similarity scores",
+                    ["model", "top_k"],
+                    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
                 )
 
                 # Retrieval latency histogram
                 self.retrieval_latency_histogram = Histogram(
-                    'rag_retrieval_latency_ms',
-                    'Retrieval latency in milliseconds',
-                    ['model'],
-                    buckets=[10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+                    "rag_retrieval_latency_ms",
+                    "Retrieval latency in milliseconds",
+                    ["model"],
+                    buckets=[10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
                 )
 
                 # Query counter
                 self.query_counter = Counter(
-                    'rag_queries_total',
-                    'Total number of RAG queries',
-                    ['model', 'has_results']
+                    "rag_queries_total",
+                    "Total number of RAG queries",
+                    ["model", "has_results"],
                 )
 
                 # Score bucket counter for quick analysis
                 self.score_bucket_counter = Counter(
-                    'rag_score_bucket_total',
-                    'Count of scores by quality bucket',
-                    ['bucket']
+                    "rag_score_bucket_total",
+                    "Count of scores by quality bucket",
+                    ["bucket"],
                 )
 
                 # IR quality metrics histograms
                 self.ndcg_histogram = Histogram(
-                    'rag_ir_ndcg',
-                    'Normalized Discounted Cumulative Gain at K',
-                    ['model'],
-                    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+                    "rag_ir_ndcg",
+                    "Normalized Discounted Cumulative Gain at K",
+                    ["model"],
+                    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
                 )
 
                 self.mrr_histogram = Histogram(
-                    'rag_ir_mrr',
-                    'Mean Reciprocal Rank',
-                    ['model'],
-                    buckets=[0.0, 0.1, 0.2, 0.25, 0.33, 0.5, 1.0]
+                    "rag_ir_mrr",
+                    "Mean Reciprocal Rank",
+                    ["model"],
+                    buckets=[0.0, 0.1, 0.2, 0.25, 0.33, 0.5, 1.0],
                 )
 
                 self.precision_histogram = Histogram(
-                    'rag_ir_precision_at_k',
-                    'Precision at K',
-                    ['model'],
-                    buckets=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+                    "rag_ir_precision_at_k",
+                    "Precision at K",
+                    ["model"],
+                    buckets=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
                 )
 
                 self.recall_histogram = Histogram(
-                    'rag_ir_recall_at_k',
-                    'Recall at K',
-                    ['model'],
-                    buckets=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+                    "rag_ir_recall_at_k",
+                    "Recall at K",
+                    ["model"],
+                    buckets=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
                 )
 
             except ValueError:
                 # Metrics already registered, get existing ones
                 self.retrieval_score_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_retrieval_score'
+                    "rag_retrieval_score"
                 )
                 self.retrieval_latency_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_retrieval_latency_ms'
+                    "rag_retrieval_latency_ms"
                 )
                 self.query_counter = REGISTRY._names_to_collectors.get(
-                    'rag_queries_total'
+                    "rag_queries_total"
                 )
                 self.score_bucket_counter = REGISTRY._names_to_collectors.get(
-                    'rag_score_bucket_total'
+                    "rag_score_bucket_total"
                 )
-                self.ndcg_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_ir_ndcg'
-                )
-                self.mrr_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_ir_mrr'
-                )
+                self.ndcg_histogram = REGISTRY._names_to_collectors.get("rag_ir_ndcg")
+                self.mrr_histogram = REGISTRY._names_to_collectors.get("rag_ir_mrr")
                 self.precision_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_ir_precision_at_k'
+                    "rag_ir_precision_at_k"
                 )
                 self.recall_histogram = REGISTRY._names_to_collectors.get(
-                    'rag_ir_recall_at_k'
+                    "rag_ir_recall_at_k"
                 )
 
         except ImportError:
-            metrics_logger.warning("prometheus_client not installed. Prometheus metrics disabled.")
+            metrics_logger.warning(
+                "prometheus_client not installed. Prometheus metrics disabled."
+            )
             self.prometheus_enabled = False
             self.retrieval_score_histogram = None
             self.retrieval_latency_histogram = None
@@ -410,7 +414,7 @@ class RetrievalMetricsLogger:
         latency_ms: float,
         score_threshold: Optional[float] = None,
         filtered_count: int = 0,
-        rerank_scores: Optional[List[float]] = None
+        rerank_scores: Optional[List[float]] = None,
     ) -> RetrievalMetrics:
         """Log retrieval metrics to file and optionally Prometheus.
 
@@ -437,7 +441,7 @@ class RetrievalMetricsLogger:
             latency_ms=latency_ms,
             score_threshold=score_threshold,
             filtered_count=filtered_count,
-            rerank_scores=rerank_scores
+            rerank_scores=rerank_scores,
         )
 
         # Log to JSON lines file
@@ -460,51 +464,57 @@ class RetrievalMetricsLogger:
         for score in metrics.scores:
             if self.retrieval_score_histogram:
                 self.retrieval_score_histogram.labels(
-                    model=metrics.model,
-                    top_k=top_k_label
+                    model=metrics.model, top_k=top_k_label
                 ).observe(score)
 
         # Record latency
         if self.retrieval_latency_histogram:
-            self.retrieval_latency_histogram.labels(
-                model=metrics.model
-            ).observe(metrics.latency_ms)
+            self.retrieval_latency_histogram.labels(model=metrics.model).observe(
+                metrics.latency_ms
+            )
 
         # Increment query counter
         if self.query_counter:
             self.query_counter.labels(
-                model=metrics.model,
-                has_results=str(metrics.num_results > 0).lower()
+                model=metrics.model, has_results=str(metrics.num_results > 0).lower()
             ).inc()
 
         # Record score bucket counts
         if self.score_bucket_counter:
-            self.score_bucket_counter.labels(bucket="above_0.8").inc(metrics.scores_above_0_8)
-            self.score_bucket_counter.labels(bucket="0.6_to_0.8").inc(metrics.scores_0_6_to_0_8)
-            self.score_bucket_counter.labels(bucket="0.4_to_0.6").inc(metrics.scores_0_4_to_0_6)
-            self.score_bucket_counter.labels(bucket="below_0.4").inc(metrics.scores_below_0_4)
+            self.score_bucket_counter.labels(bucket="above_0.8").inc(
+                metrics.scores_above_0_8
+            )
+            self.score_bucket_counter.labels(bucket="0.6_to_0.8").inc(
+                metrics.scores_0_6_to_0_8
+            )
+            self.score_bucket_counter.labels(bucket="0.4_to_0.6").inc(
+                metrics.scores_0_4_to_0_6
+            )
+            self.score_bucket_counter.labels(bucket="below_0.4").inc(
+                metrics.scores_below_0_4
+            )
 
         # Record IR quality metrics
         if metrics.ir_metrics:
             if self.ndcg_histogram:
-                self.ndcg_histogram.labels(
-                    model=metrics.model
-                ).observe(metrics.ir_metrics.get('ndcg_at_5', 0.0))
+                self.ndcg_histogram.labels(model=metrics.model).observe(
+                    metrics.ir_metrics.get("ndcg_at_5", 0.0)
+                )
 
             if self.mrr_histogram:
-                self.mrr_histogram.labels(
-                    model=metrics.model
-                ).observe(metrics.ir_metrics.get('mrr', 0.0))
+                self.mrr_histogram.labels(model=metrics.model).observe(
+                    metrics.ir_metrics.get("mrr", 0.0)
+                )
 
             if self.precision_histogram:
-                self.precision_histogram.labels(
-                    model=metrics.model
-                ).observe(metrics.ir_metrics.get('precision_at_k', 0.0))
+                self.precision_histogram.labels(model=metrics.model).observe(
+                    metrics.ir_metrics.get("precision_at_k", 0.0)
+                )
 
             if self.recall_histogram:
-                self.recall_histogram.labels(
-                    model=metrics.model
-                ).observe(metrics.ir_metrics.get('recall_at_k', 0.0))
+                self.recall_histogram.labels(model=metrics.model).observe(
+                    metrics.ir_metrics.get("recall_at_k", 0.0)
+                )
 
 
 class RetrievalTimer:
@@ -534,7 +544,9 @@ class RetrievalTimer:
 retrieval_metrics_logger = RetrievalMetricsLogger()
 
 
-def get_metrics_summary(log_path: str = METRICS_LOG_PATH, last_n: int = 100) -> Dict[str, Any]:
+def get_metrics_summary(
+    log_path: str = METRICS_LOG_PATH, last_n: int = 100
+) -> Dict[str, Any]:
     """Read recent metrics and compute summary statistics.
 
     Useful for debugging and monitoring dashboard data.
@@ -547,7 +559,7 @@ def get_metrics_summary(log_path: str = METRICS_LOG_PATH, last_n: int = 100) -> 
         Summary statistics dictionary
     """
     try:
-        with open(log_path, 'r') as f:
+        with open(log_path, "r") as f:
             lines = f.readlines()
 
         # Get last N entries
@@ -567,21 +579,21 @@ def get_metrics_summary(log_path: str = METRICS_LOG_PATH, last_n: int = 100) -> 
         for line in recent_lines:
             try:
                 entry = json.loads(line.strip())
-                all_scores.extend(entry.get('scores', []))
-                all_latencies.append(entry.get('latency_ms', 0))
+                all_scores.extend(entry.get("scores", []))
+                all_latencies.append(entry.get("latency_ms", 0))
 
-                if entry.get('num_results', 0) > 0:
+                if entry.get("num_results", 0) > 0:
                     queries_with_results += 1
                 else:
                     queries_without_results += 1
 
                 # Collect IR metrics if present
-                ir_metrics = entry.get('ir_metrics')
+                ir_metrics = entry.get("ir_metrics")
                 if ir_metrics:
-                    all_ndcg.append(ir_metrics.get('ndcg_at_5', 0.0))
-                    all_mrr.append(ir_metrics.get('mrr', 0.0))
-                    all_precision.append(ir_metrics.get('precision_at_k', 0.0))
-                    all_recall.append(ir_metrics.get('recall_at_k', 0.0))
+                    all_ndcg.append(ir_metrics.get("ndcg_at_5", 0.0))
+                    all_mrr.append(ir_metrics.get("mrr", 0.0))
+                    all_precision.append(ir_metrics.get("precision_at_k", 0.0))
+                    all_recall.append(ir_metrics.get("recall_at_k", 0.0))
 
             except json.JSONDecodeError:
                 continue
@@ -594,36 +606,48 @@ def get_metrics_summary(log_path: str = METRICS_LOG_PATH, last_n: int = 100) -> 
         }
 
         if all_scores:
-            summary.update({
-                "score_mean": round(statistics.mean(all_scores), 4),
-                "score_median": round(statistics.median(all_scores), 4),
-                "score_min": round(min(all_scores), 4),
-                "score_max": round(max(all_scores), 4),
-                "score_std": round(statistics.stdev(all_scores), 4) if len(all_scores) > 1 else 0,
-            })
+            summary.update(
+                {
+                    "score_mean": round(statistics.mean(all_scores), 4),
+                    "score_median": round(statistics.median(all_scores), 4),
+                    "score_min": round(min(all_scores), 4),
+                    "score_max": round(max(all_scores), 4),
+                    "score_std": round(statistics.stdev(all_scores), 4)
+                    if len(all_scores) > 1
+                    else 0,
+                }
+            )
 
         if all_latencies:
-            summary.update({
-                "latency_mean_ms": round(statistics.mean(all_latencies), 2),
-                "latency_median_ms": round(statistics.median(all_latencies), 2),
-                "latency_p95_ms": round(sorted(all_latencies)[int(len(all_latencies) * 0.95)], 2),
-                "latency_max_ms": round(max(all_latencies), 2),
-            })
+            summary.update(
+                {
+                    "latency_mean_ms": round(statistics.mean(all_latencies), 2),
+                    "latency_median_ms": round(statistics.median(all_latencies), 2),
+                    "latency_p95_ms": round(
+                        sorted(all_latencies)[int(len(all_latencies) * 0.95)], 2
+                    ),
+                    "latency_max_ms": round(max(all_latencies), 2),
+                }
+            )
 
         # Add IR quality metrics summary
         if all_ndcg:
-            summary.update({
-                "ir_metrics": {
-                    "ndcg_mean": round(statistics.mean(all_ndcg), 4),
-                    "ndcg_median": round(statistics.median(all_ndcg), 4),
-                    "mrr_mean": round(statistics.mean(all_mrr), 4),
-                    "mrr_median": round(statistics.median(all_mrr), 4),
-                    "precision_at_k_mean": round(statistics.mean(all_precision), 4),
-                    "precision_at_k_median": round(statistics.median(all_precision), 4),
-                    "recall_at_k_mean": round(statistics.mean(all_recall), 4),
-                    "recall_at_k_median": round(statistics.median(all_recall), 4),
+            summary.update(
+                {
+                    "ir_metrics": {
+                        "ndcg_mean": round(statistics.mean(all_ndcg), 4),
+                        "ndcg_median": round(statistics.median(all_ndcg), 4),
+                        "mrr_mean": round(statistics.mean(all_mrr), 4),
+                        "mrr_median": round(statistics.median(all_mrr), 4),
+                        "precision_at_k_mean": round(statistics.mean(all_precision), 4),
+                        "precision_at_k_median": round(
+                            statistics.median(all_precision), 4
+                        ),
+                        "recall_at_k_mean": round(statistics.mean(all_recall), 4),
+                        "recall_at_k_median": round(statistics.median(all_recall), 4),
+                    }
                 }
-            })
+            )
 
         return summary
 

@@ -28,6 +28,7 @@ class HyDEExpander(BaseExpander):
         """Lazy load the HyDE expander to avoid circular imports."""
         if self._expander is None:
             from app.query_expansion import hyde_expander
+
             self._expander = hyde_expander
         return self._expander
 
@@ -45,7 +46,8 @@ class HyDEExpander(BaseExpander):
 
         return ExpansionResult(
             original_query=hyde_result.original_query,
-            expanded_query=hyde_result.hypothetical_document or hyde_result.original_query,
+            expanded_query=hyde_result.hypothetical_document
+            or hyde_result.original_query,
             expanded=hyde_result.expanded,
             skip_reason=hyde_result.skip_reason or hyde_result.error,
             context_terms=[],
@@ -64,7 +66,8 @@ class HyDEExpander(BaseExpander):
 
         return ExpansionResult(
             original_query=hyde_result.original_query,
-            expanded_query=hyde_result.hypothetical_document or hyde_result.original_query,
+            expanded_query=hyde_result.hypothetical_document
+            or hyde_result.original_query,
             expanded=hyde_result.expanded,
             skip_reason=hyde_result.skip_reason or hyde_result.error,
             context_terms=[],
@@ -81,7 +84,7 @@ class HyDEExpander(BaseExpander):
         return {
             **super().get_config(),
             "enabled": settings.hyde_enabled,
-            "model": getattr(settings, 'hyde_model', None),
+            "model": getattr(settings, "hyde_model", None),
         }
 
     def is_available(self) -> bool:

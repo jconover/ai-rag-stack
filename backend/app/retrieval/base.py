@@ -30,6 +30,7 @@ class RetrievalResult:
         cache_hit: Whether the result came from cache
         error: Error message if retrieval failed
     """
+
     documents: List[Document] = field(default_factory=list)
     scores: List[float] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -115,11 +116,7 @@ class RetrievalStrategy(ABC):
 
     @abstractmethod
     def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None,
-        **kwargs
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None, **kwargs
     ) -> RetrievalResult:
         """Retrieve documents relevant to the query.
 
@@ -136,11 +133,7 @@ class RetrievalStrategy(ABC):
 
     @abstractmethod
     async def retrieve_async(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None,
-        **kwargs
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None, **kwargs
     ) -> RetrievalResult:
         """Async version of retrieve.
 

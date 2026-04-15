@@ -23,7 +23,7 @@ Tables use proper indexing for common query patterns:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, List
 
 from sqlalchemy import (
@@ -48,6 +48,7 @@ from app.database import Base
 # Enums for A/B testing
 class ExperimentType(enum.Enum):
     """Types of A/B testing experiments."""
+
     MODEL = "model"
     PROMPT = "prompt"
     RAG_CONFIG = "rag_config"
@@ -56,6 +57,7 @@ class ExperimentType(enum.Enum):
 
 class ExperimentStatus(enum.Enum):
     """Lifecycle status of an experiment."""
+
     DRAFT = "draft"
     RUNNING = "running"
     PAUSED = "paused"
@@ -596,9 +598,7 @@ class Feedback(Base):
     )
 
     # Composite index for analytics
-    __table_args__ = (
-        Index("ix_feedback_helpful_created", "helpful", "created_at"),
-    )
+    __table_args__ = (Index("ix_feedback_helpful_created", "helpful", "created_at"),)
 
     def __repr__(self) -> str:
         return f"<Feedback(id={self.id}, helpful={self.helpful}, session={self.session_id[:8]}...)>"
@@ -849,7 +849,9 @@ class Experiment(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Experiment(id={self.id}, name={self.name}, status={self.status.value})>"
+        return (
+            f"<Experiment(id={self.id}, name={self.name}, status={self.status.value})>"
+        )
 
 
 class ExperimentAssignment(Base):
@@ -908,7 +910,12 @@ class ExperimentAssignment(Base):
 
     # Composite indexes for lookups
     __table_args__ = (
-        Index("ix_exp_assign_experiment_session", "experiment_id", "session_id", unique=True),
+        Index(
+            "ix_exp_assign_experiment_session",
+            "experiment_id",
+            "session_id",
+            unique=True,
+        ),
         Index("ix_exp_assign_experiment_variant", "experiment_id", "variant_id"),
     )
 

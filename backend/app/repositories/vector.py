@@ -31,6 +31,7 @@ class VectorRepository(BaseRepository[Document]):
         """Lazy load vector store to avoid circular imports."""
         if self._vector_store is None:
             from app.vectorstore import vector_store
+
             self._vector_store = vector_store
         return self._vector_store
 
@@ -62,10 +63,7 @@ class VectorRepository(BaseRepository[Document]):
             return False
 
     async def search_with_scores(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None
     ) -> List[Tuple[Document, float]]:
         """Search for similar documents using vector similarity.
 
@@ -82,9 +80,7 @@ class VectorRepository(BaseRepository[Document]):
         try:
             store = self._get_store()
             results, _ = store.search_with_cache_info(
-                query=query,
-                top_k=top_k,
-                min_score=min_score
+                query=query, top_k=top_k, min_score=min_score
             )
             return results
         except Exception as e:
@@ -92,10 +88,7 @@ class VectorRepository(BaseRepository[Document]):
             raise QueryError(str(e), "search_with_scores")
 
     async def hybrid_search(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None
     ) -> List[Tuple[Document, float]]:
         """Search using hybrid (dense + sparse) retrieval.
 
@@ -112,9 +105,7 @@ class VectorRepository(BaseRepository[Document]):
         try:
             store = self._get_store()
             results, _ = store.hybrid_search_with_cache_info(
-                query=query,
-                top_k=top_k,
-                min_score=min_score
+                query=query, top_k=top_k, min_score=min_score
             )
             return results
         except Exception as e:
@@ -137,9 +128,7 @@ class VectorRepository(BaseRepository[Document]):
             raise QueryError(str(e), "get_collection_stats")
 
     async def add_documents(
-        self,
-        documents: List[Document],
-        batch_size: int = 100
+        self, documents: List[Document], batch_size: int = 100
     ) -> int:
         """Add documents to the vector store.
 

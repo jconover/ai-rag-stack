@@ -27,6 +27,7 @@ class OllamaGenerator(ResponseGenerator):
         """Lazy load Ollama client."""
         if self._client is None:
             import ollama
+
             self._client = ollama
         return self._client
 
@@ -53,7 +54,7 @@ contain enough information, say so. Include code examples when helpful."""
         query: str,
         context: str,
         model: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, str]]:
         """Build the message list for Ollama."""
         messages = []
@@ -65,10 +66,9 @@ contain enough information, say so. Include code examples when helpful."""
         # Add conversation history if provided
         if conversation_history:
             for msg in conversation_history[-5:]:  # Last 5 messages
-                messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
+                messages.append(
+                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                )
 
         # User message with context
         user_content = f"""Context from documentation:
@@ -89,7 +89,7 @@ Please provide a helpful answer based on the context above."""
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        **kwargs
+        **kwargs,
     ) -> GenerationResult:
         """Generate a response using Ollama."""
         import asyncio
@@ -97,7 +97,7 @@ Please provide a helpful answer based on the context above."""
         model = model or settings.ollama_default_model
         start_time = time.perf_counter()
 
-        conversation_history = kwargs.get('conversation_history')
+        conversation_history = kwargs.get("conversation_history")
         messages = self._build_messages(query, context, model, conversation_history)
 
         try:
@@ -112,12 +112,12 @@ Please provide a helpful answer based on the context above."""
                     options={
                         "temperature": temperature,
                         "num_predict": max_tokens,
-                    }
-                )
+                    },
+                ),
             )
 
             generation_time_ms = (time.perf_counter() - start_time) * 1000
-            response_text = response.get('message', {}).get('content', '')
+            response_text = response.get("message", {}).get("content", "")
 
             return GenerationResult(
                 response=response_text,
@@ -127,7 +127,7 @@ Please provide a helpful answer based on the context above."""
                 metadata={
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                }
+                },
             )
 
         except Exception as e:
@@ -147,7 +147,7 @@ Please provide a helpful answer based on the context above."""
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        **kwargs
+        **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Generate a streaming response using Ollama."""
         import asyncio
@@ -155,7 +155,7 @@ Please provide a helpful answer based on the context above."""
         model = model or settings.ollama_default_model
         start_time = time.perf_counter()
 
-        conversation_history = kwargs.get('conversation_history')
+        conversation_history = kwargs.get("conversation_history")
         messages = self._build_messages(query, context, model, conversation_history)
 
         # Yield metadata first
@@ -178,14 +178,14 @@ Please provide a helpful answer based on the context above."""
                     options={
                         "temperature": temperature,
                         "num_predict": max_tokens,
-                    }
+                    },
                 )
 
             stream = await loop.run_in_executor(None, stream_sync)
 
             full_response = ""
             for chunk in stream:
-                content = chunk.get('message', {}).get('content', '')
+                content = chunk.get("message", {}).get("content", "")
                 if content:
                     full_response += content
                     yield {

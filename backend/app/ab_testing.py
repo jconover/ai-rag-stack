@@ -40,7 +40,7 @@ import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 from sqlalchemy import select, func, and_
@@ -119,6 +119,7 @@ class ABTestingService:
             List of active experiment dictionaries with id, name, type, variants,
             and traffic_split.
         """
+
         async def _fetch(session: AsyncSession) -> list[dict[str, Any]]:
             stmt = select(Experiment).where(
                 Experiment.status == ExperimentStatus.RUNNING
@@ -135,7 +136,9 @@ class ABTestingService:
                     "variants": exp.variants,
                     "traffic_split": exp.traffic_split,
                     "success_metric": exp.success_metric,
-                    "started_at": exp.started_at.isoformat() if exp.started_at else None,
+                    "started_at": exp.started_at.isoformat()
+                    if exp.started_at
+                    else None,
                 }
                 for exp in experiments
             ]
@@ -165,6 +168,7 @@ class ABTestingService:
         Returns:
             Variant configuration dict or None if experiment not found/not running
         """
+
         async def _fetch(session: AsyncSession) -> Optional[dict[str, Any]]:
             # Check if session already has an assignment
             stmt = select(ExperimentAssignment).where(
@@ -219,6 +223,7 @@ class ABTestingService:
         Returns:
             Assigned variant configuration dict or None if experiment not running
         """
+
         async def _assign(session: AsyncSession) -> Optional[dict[str, Any]]:
             # Get experiment and verify it's running
             experiment = await self._get_experiment(experiment_id, session)
@@ -290,6 +295,7 @@ class ABTestingService:
         Returns:
             True if result was recorded successfully, False otherwise
         """
+
         async def _record(session: AsyncSession) -> bool:
             try:
                 result = ExperimentResult(
@@ -338,6 +344,7 @@ class ABTestingService:
         Returns:
             ExperimentStats with per-variant stats and p-value, or None if not found
         """
+
         async def _get_stats(session: AsyncSession) -> Optional[ExperimentStats]:
             # Get experiment
             experiment = await self._get_experiment(experiment_id, session)
@@ -425,24 +432,34 @@ class ABTestingService:
                             treatment_mean = variant_stats[variant_ids[1]].mean
 
                             # Determine which is better (depends on metric - lower is better for latency)
-                            if target_metric in ("latency", "latency_ms", "response_time"):
+                            if target_metric in (
+                                "latency",
+                                "latency_ms",
+                                "response_time",
+                            ):
                                 winner = (
                                     variant_ids[0]
                                     if control_mean < treatment_mean
                                     else variant_ids[1]
                                 )
-                                improvement = abs(control_mean - treatment_mean) / max(
-                                    control_mean, treatment_mean
-                                ) * 100
+                                improvement = (
+                                    abs(control_mean - treatment_mean)
+                                    / max(control_mean, treatment_mean)
+                                    * 100
+                                )
                             else:
                                 winner = (
                                     variant_ids[0]
                                     if control_mean > treatment_mean
                                     else variant_ids[1]
                                 )
-                                improvement = abs(control_mean - treatment_mean) / min(
-                                    control_mean, treatment_mean
-                                ) * 100 if min(control_mean, treatment_mean) > 0 else 0
+                                improvement = (
+                                    abs(control_mean - treatment_mean)
+                                    / min(control_mean, treatment_mean)
+                                    * 100
+                                    if min(control_mean, treatment_mean) > 0
+                                    else 0
+                                )
 
                             recommendation = (
                                 f"Statistically significant result (p={p_value:.4f}). "
@@ -495,6 +512,7 @@ class ABTestingService:
         Returns:
             Experiment dict or None if not found
         """
+
         async def _fetch(session: AsyncSession) -> Optional[dict[str, Any]]:
             stmt = select(Experiment).where(Experiment.name == name)
             result = await session.execute(stmt)
@@ -513,8 +531,12 @@ class ABTestingService:
                 "traffic_split": experiment.traffic_split,
                 "success_metric": experiment.success_metric,
                 "created_at": experiment.created_at.isoformat(),
-                "started_at": experiment.started_at.isoformat() if experiment.started_at else None,
-                "ended_at": experiment.ended_at.isoformat() if experiment.ended_at else None,
+                "started_at": experiment.started_at.isoformat()
+                if experiment.started_at
+                else None,
+                "ended_at": experiment.ended_at.isoformat()
+                if experiment.ended_at
+                else None,
             }
 
         if db:
@@ -663,7 +685,6 @@ class ABTestingService:
 
         # For smaller df, use a reasonable approximation
         # Based on the regularized incomplete beta function
-        x = df / (df + t_stat ** 2)
 
         # Approximation for incomplete beta function
         # This gives reasonable results for df > 1

@@ -253,7 +253,11 @@ def get_llm_provider(name: Optional[str] = None) -> LLMProvider:
         )
 
     _provider_cache[provider_name] = provider
-    logger.info("Initialized LLM provider: %s (model=%s)", provider.name, getattr(provider, "model", "?"))
+    logger.info(
+        "Initialized LLM provider: %s (model=%s)",
+        provider.name,
+        getattr(provider, "model", "?"),
+    )
     return provider
 
 

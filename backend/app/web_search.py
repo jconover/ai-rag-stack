@@ -16,7 +16,7 @@ Usage:
         results = await web_searcher.search("What is AWS WAF")
         # Returns list of WebSearchResult with content, url, score
 """
-import asyncio
+
 import logging
 import time
 from dataclasses import dataclass, field
@@ -39,6 +39,7 @@ TAVILY_API_URL = "https://api.tavily.com/search"
 @dataclass
 class WebSearchResult:
     """A single web search result."""
+
     title: str
     url: str
     content: str
@@ -49,6 +50,7 @@ class WebSearchResult:
 @dataclass
 class WebSearchResponse:
     """Response from web search."""
+
     query: str
     results: List[WebSearchResult] = field(default_factory=list)
     search_time_ms: float = 0.0
@@ -140,7 +142,10 @@ class TavilySearcher:
             return True, f"low_avg_score_{avg_similarity_score:.3f}"
 
         # Low max score (if provided)
-        if max_similarity_score is not None and max_similarity_score < self.min_score_threshold:
+        if (
+            max_similarity_score is not None
+            and max_similarity_score < self.min_score_threshold
+        ):
             return True, f"low_max_score_{max_similarity_score:.3f}"
 
         return False, None
@@ -208,7 +213,9 @@ class TavilySearcher:
                     url=item.get("url", ""),
                     content=item.get("content", ""),
                     score=item.get("score", 0.0),
-                    raw_content=item.get("raw_content") if include_raw_content else None,
+                    raw_content=item.get("raw_content")
+                    if include_raw_content
+                    else None,
                 )
                 response.results.append(result)
 
@@ -227,7 +234,9 @@ class TavilySearcher:
             logger.warning(response.error)
 
         except httpx.HTTPStatusError as e:
-            response.error = f"Tavily API error: {e.response.status_code} - {e.response.text[:200]}"
+            response.error = (
+                f"Tavily API error: {e.response.status_code} - {e.response.text[:200]}"
+            )
             logger.error(response.error)
 
         except Exception as e:
@@ -292,7 +301,9 @@ class TavilySearcher:
                     url=item.get("url", ""),
                     content=item.get("content", ""),
                     score=item.get("score", 0.0),
-                    raw_content=item.get("raw_content") if include_raw_content else None,
+                    raw_content=item.get("raw_content")
+                    if include_raw_content
+                    else None,
                 )
                 response.results.append(result)
 
@@ -311,7 +322,9 @@ class TavilySearcher:
             logger.warning(response.error)
 
         except httpx.HTTPStatusError as e:
-            response.error = f"Tavily API error: {e.response.status_code} - {e.response.text[:200]}"
+            response.error = (
+                f"Tavily API error: {e.response.status_code} - {e.response.text[:200]}"
+            )
             logger.error(response.error)
 
         except Exception as e:
@@ -345,9 +358,7 @@ class TavilySearcher:
                 content += "..."
 
             formatted_parts.append(
-                f"[Web Source {i}] {result.title}\n"
-                f"URL: {result.url}\n"
-                f"{content}"
+                f"[Web Source {i}] {result.title}\nURL: {result.url}\n{content}"
             )
 
         return "\n\n".join(formatted_parts)

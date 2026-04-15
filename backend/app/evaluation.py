@@ -31,9 +31,9 @@ from datetime import datetime, timezone
 import json
 
 try:
-    from langchain_core.documents import Document
+    from langchain_core.documents import Document  # noqa: F401
 except ImportError:
-    from langchain.schema import Document
+    pass
 
 from app.config import settings
 
@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Data Structures for Evaluation
 # =============================================================================
+
 
 @dataclass
 class EvalExample:
@@ -56,6 +57,7 @@ class EvalExample:
         difficulty: Optional difficulty level (easy, medium, hard)
         notes: Optional notes about this example
     """
+
     query: str
     relevant_doc_ids: List[str]
     expected_keywords: List[str]
@@ -76,6 +78,7 @@ class RAGEvalMetrics:
         ndcg_at_k: Normalized Discounted Cumulative Gain (optional)
         keyword_hit_rate: Fraction of expected keywords found in results
     """
+
     mrr_at_k: float = 0.0
     recall_at_k: float = 0.0
     precision_at_k: float = 0.0
@@ -104,6 +107,7 @@ class EvalResult:
         retrieval_time_ms: Time taken for retrieval in milliseconds
         error: Error message if evaluation failed
     """
+
     example: EvalExample
     metrics: RAGEvalMetrics
     retrieved_sources: List[str] = field(default_factory=list)
@@ -136,6 +140,7 @@ class EvalSuiteResult:
         timestamp: When the evaluation was run
         config: Configuration used for evaluation
     """
+
     total_examples: int = 0
     successful_evals: int = 0
     failed_evals: int = 0
@@ -184,10 +189,16 @@ SEED_EVAL_DATASET: List[EvalExample] = [
     EvalExample(
         query="How do I create a Kubernetes deployment?",
         relevant_doc_ids=["kubernetes", "deployment", "kubectl"],
-        expected_keywords=["deployment", "replicas", "spec", "template", "kubectl apply"],
+        expected_keywords=[
+            "deployment",
+            "replicas",
+            "spec",
+            "template",
+            "kubectl apply",
+        ],
         category="kubernetes",
         difficulty="easy",
-        notes="Basic deployment creation question"
+        notes="Basic deployment creation question",
     ),
     EvalExample(
         query="What is a Kubernetes pod and how does it differ from a container?",
@@ -195,7 +206,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["pod", "container", "shared", "network", "volume"],
         category="kubernetes",
         difficulty="easy",
-        notes="Fundamental concept question"
+        notes="Fundamental concept question",
     ),
     EvalExample(
         query="How do I expose a Kubernetes service externally using LoadBalancer?",
@@ -203,17 +214,22 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["service", "LoadBalancer", "type", "port", "external"],
         category="kubernetes",
         difficulty="medium",
-        notes="Service exposure question"
+        notes="Service exposure question",
     ),
     EvalExample(
         query="How do I configure horizontal pod autoscaling based on CPU usage?",
         relevant_doc_ids=["kubernetes", "autoscal", "hpa"],
-        expected_keywords=["HorizontalPodAutoscaler", "CPU", "minReplicas", "maxReplicas", "metrics"],
+        expected_keywords=[
+            "HorizontalPodAutoscaler",
+            "CPU",
+            "minReplicas",
+            "maxReplicas",
+            "metrics",
+        ],
         category="kubernetes",
         difficulty="medium",
-        notes="Autoscaling configuration"
+        notes="Autoscaling configuration",
     ),
-
     # --- Docker Queries ---
     EvalExample(
         query="How do I build a Docker image from a Dockerfile?",
@@ -221,7 +237,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["docker build", "Dockerfile", "-t", "tag", "image"],
         category="docker",
         difficulty="easy",
-        notes="Basic Docker build question"
+        notes="Basic Docker build question",
     ),
     EvalExample(
         query="How do I set up Docker Compose for multi-container applications?",
@@ -229,7 +245,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["docker-compose", "services", "volumes", "networks", "yaml"],
         category="docker",
         difficulty="medium",
-        notes="Docker Compose setup"
+        notes="Docker Compose setup",
     ),
     EvalExample(
         query="What are Docker networking modes and when to use each?",
@@ -237,9 +253,8 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["bridge", "host", "none", "overlay", "network"],
         category="docker",
         difficulty="medium",
-        notes="Docker networking concepts"
+        notes="Docker networking concepts",
     ),
-
     # --- Terraform Queries ---
     EvalExample(
         query="How do I manage Terraform state in a team environment?",
@@ -247,7 +262,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["state", "backend", "remote", "s3", "locking"],
         category="terraform",
         difficulty="medium",
-        notes="Terraform state management"
+        notes="Terraform state management",
     ),
     EvalExample(
         query="What are Terraform modules and how do I create one?",
@@ -255,7 +270,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["module", "source", "variable", "output", "reusable"],
         category="terraform",
         difficulty="medium",
-        notes="Terraform modules question"
+        notes="Terraform modules question",
     ),
     EvalExample(
         query="How do I use Terraform providers for AWS resources?",
@@ -263,9 +278,8 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["provider", "aws", "region", "resource", "terraform init"],
         category="terraform",
         difficulty="easy",
-        notes="Provider configuration"
+        notes="Provider configuration",
     ),
-
     # --- CI/CD Queries ---
     EvalExample(
         query="How do I set up a GitHub Actions workflow for CI/CD?",
@@ -273,7 +287,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["workflow", "jobs", "steps", "on", "runs-on", "yaml"],
         category="cicd",
         difficulty="medium",
-        notes="GitHub Actions setup"
+        notes="GitHub Actions setup",
     ),
     EvalExample(
         query="What are GitHub Actions secrets and how do I use them?",
@@ -281,9 +295,8 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["secrets", "env", "GITHUB_TOKEN", "encrypted"],
         category="cicd",
         difficulty="easy",
-        notes="Secrets management in CI"
+        notes="Secrets management in CI",
     ),
-
     # --- Ansible Queries ---
     EvalExample(
         query="How do I write an Ansible playbook for server configuration?",
@@ -291,9 +304,8 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["playbook", "hosts", "tasks", "module", "yaml"],
         category="ansible",
         difficulty="medium",
-        notes="Basic Ansible playbook"
+        notes="Basic Ansible playbook",
     ),
-
     # --- Prometheus/Monitoring Queries ---
     EvalExample(
         query="How do I configure Prometheus alerting rules?",
@@ -301,9 +313,8 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["alert", "rules", "expr", "for", "labels", "annotations"],
         category="monitoring",
         difficulty="medium",
-        notes="Prometheus alerting"
+        notes="Prometheus alerting",
     ),
-
     # --- Helm Queries ---
     EvalExample(
         query="How do I create a Helm chart for my application?",
@@ -311,7 +322,7 @@ SEED_EVAL_DATASET: List[EvalExample] = [
         expected_keywords=["chart", "values", "templates", "Chart.yaml", "helm create"],
         category="helm",
         difficulty="medium",
-        notes="Helm chart creation"
+        notes="Helm chart creation",
     ),
 ]
 
@@ -320,10 +331,9 @@ SEED_EVAL_DATASET: List[EvalExample] = [
 # Core Evaluation Functions
 # =============================================================================
 
+
 def calculate_mrr(
-    retrieved_docs: List[Tuple[Any, float]],
-    relevant_doc_ids: List[str],
-    k: int = 5
+    retrieved_docs: List[Tuple[Any, float]], relevant_doc_ids: List[str], k: int = 5
 ) -> float:
     """Calculate Mean Reciprocal Rank at k.
 
@@ -339,25 +349,25 @@ def calculate_mrr(
         MRR score (0.0 to 1.0, higher is better)
     """
     for rank, (doc, _score) in enumerate(retrieved_docs[:k], start=1):
-        source = doc.metadata.get('source', '').lower()
-        source_type = doc.metadata.get('source_type', '').lower()
+        source = doc.metadata.get("source", "").lower()
+        source_type = doc.metadata.get("source_type", "").lower()
         content = doc.page_content.lower()
 
         # Check if any relevant doc ID matches this document
         for relevant_id in relevant_doc_ids:
             relevant_lower = relevant_id.lower()
-            if (relevant_lower in source or
-                relevant_lower in source_type or
-                relevant_lower in content[:500]):  # Check beginning of content
+            if (
+                relevant_lower in source
+                or relevant_lower in source_type
+                or relevant_lower in content[:500]
+            ):  # Check beginning of content
                 return 1.0 / rank
 
     return 0.0  # No relevant document found in top k
 
 
 def calculate_recall(
-    retrieved_docs: List[Tuple[Any, float]],
-    relevant_doc_ids: List[str],
-    k: int = 5
+    retrieved_docs: List[Tuple[Any, float]], relevant_doc_ids: List[str], k: int = 5
 ) -> float:
     """Calculate Recall at k.
 
@@ -378,24 +388,24 @@ def calculate_recall(
     found_relevant = set()
 
     for doc, _score in retrieved_docs[:k]:
-        source = doc.metadata.get('source', '').lower()
-        source_type = doc.metadata.get('source_type', '').lower()
+        source = doc.metadata.get("source", "").lower()
+        source_type = doc.metadata.get("source_type", "").lower()
         content = doc.page_content.lower()
 
         for relevant_id in relevant_doc_ids:
             relevant_lower = relevant_id.lower()
-            if (relevant_lower in source or
-                relevant_lower in source_type or
-                relevant_lower in content[:500]):
+            if (
+                relevant_lower in source
+                or relevant_lower in source_type
+                or relevant_lower in content[:500]
+            ):
                 found_relevant.add(relevant_id)
 
     return len(found_relevant) / len(relevant_doc_ids)
 
 
 def calculate_precision(
-    retrieved_docs: List[Tuple[Any, float]],
-    relevant_doc_ids: List[str],
-    k: int = 5
+    retrieved_docs: List[Tuple[Any, float]], relevant_doc_ids: List[str], k: int = 5
 ) -> float:
     """Calculate Precision at k.
 
@@ -417,16 +427,18 @@ def calculate_precision(
     actual_k = min(k, len(retrieved_docs))
 
     for doc, _score in retrieved_docs[:actual_k]:
-        source = doc.metadata.get('source', '').lower()
-        source_type = doc.metadata.get('source_type', '').lower()
+        source = doc.metadata.get("source", "").lower()
+        source_type = doc.metadata.get("source_type", "").lower()
         content = doc.page_content.lower()
 
         is_relevant = False
         for relevant_id in relevant_doc_ids:
             relevant_lower = relevant_id.lower()
-            if (relevant_lower in source or
-                relevant_lower in source_type or
-                relevant_lower in content[:500]):
+            if (
+                relevant_lower in source
+                or relevant_lower in source_type
+                or relevant_lower in content[:500]
+            ):
                 is_relevant = True
                 break
 
@@ -437,9 +449,7 @@ def calculate_precision(
 
 
 def calculate_keyword_hit_rate(
-    retrieved_docs: List[Tuple[Any, float]],
-    expected_keywords: List[str],
-    k: int = 5
+    retrieved_docs: List[Tuple[Any, float]], expected_keywords: List[str], k: int = 5
 ) -> Tuple[float, List[str], List[str]]:
     """Calculate keyword hit rate in retrieved documents.
 
@@ -458,7 +468,7 @@ def calculate_keyword_hit_rate(
     combined_content = ""
     for doc, _score in retrieved_docs[:k]:
         combined_content += " " + doc.page_content.lower()
-        combined_content += " " + doc.metadata.get('source', '').lower()
+        combined_content += " " + doc.metadata.get("source", "").lower()
 
     keywords_found = []
     keywords_missed = []
@@ -474,8 +484,7 @@ def calculate_keyword_hit_rate(
 
 
 def calculate_avg_similarity(
-    retrieved_docs: List[Tuple[Any, float]],
-    k: int = 5
+    retrieved_docs: List[Tuple[Any, float]], k: int = 5
 ) -> float:
     """Calculate average similarity score of retrieved documents.
 
@@ -497,7 +506,7 @@ def evaluate_retrieval(
     query: str,
     retrieved_docs: List[Tuple[Any, float]],
     eval_example: EvalExample,
-    k: int = 5
+    k: int = 5,
 ) -> EvalResult:
     """Run all evaluation metrics for a single query.
 
@@ -532,22 +541,26 @@ def evaluate_retrieval(
     missed_relevant = list(eval_example.relevant_doc_ids)
 
     for doc, _score in retrieved_docs[:k]:
-        source = doc.metadata.get('source', '').lower()
-        source_type = doc.metadata.get('source_type', '').lower()
+        source = doc.metadata.get("source", "").lower()
+        source_type = doc.metadata.get("source_type", "").lower()
         content = doc.page_content.lower()
 
         for relevant_id in eval_example.relevant_doc_ids:
             relevant_lower = relevant_id.lower()
-            if (relevant_lower in source or
-                relevant_lower in source_type or
-                relevant_lower in content[:500]):
+            if (
+                relevant_lower in source
+                or relevant_lower in source_type
+                or relevant_lower in content[:500]
+            ):
                 if relevant_id not in found_relevant:
                     found_relevant.append(relevant_id)
                 if relevant_id in missed_relevant:
                     missed_relevant.remove(relevant_id)
 
     # Extract retrieved sources and scores
-    retrieved_sources = [doc.metadata.get('source', 'unknown') for doc, _ in retrieved_docs[:k]]
+    retrieved_sources = [
+        doc.metadata.get("source", "unknown") for doc, _ in retrieved_docs[:k]
+    ]
     retrieved_scores = [score for _, score in retrieved_docs[:k]]
 
     return EvalResult(
@@ -565,6 +578,7 @@ def evaluate_retrieval(
 # =============================================================================
 # Evaluation Runner
 # =============================================================================
+
 
 async def run_evaluation_suite(
     dataset: Optional[List[EvalExample]] = None,
@@ -615,7 +629,7 @@ async def run_evaluation_suite(
         logger.warning("No evaluation examples found for specified criteria")
         return EvalSuiteResult(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            config={"error": "No examples found"}
+            config={"error": "No examples found"},
         )
 
     # Run evaluations
@@ -642,6 +656,7 @@ async def run_evaluation_suite(
             # Apply reranking if enabled
             if use_reranker and retrieved_docs:
                 from app.reranker import rerank_documents
+
                 docs_only = [doc for doc, _ in retrieved_docs]
                 reranked = rerank_documents(
                     query=example.query,
@@ -650,8 +665,7 @@ async def run_evaluation_suite(
                 )
                 # Rebuild docs with scores (use rerank scores from metadata)
                 retrieved_docs = [
-                    (doc, doc.metadata.get('rerank_score', 0.0))
-                    for doc in reranked
+                    (doc, doc.metadata.get("rerank_score", 0.0)) for doc in reranked
                 ]
 
             retrieval_time = (time.perf_counter() - start_time) * 1000
@@ -669,12 +683,14 @@ async def run_evaluation_suite(
 
         except Exception as e:
             logger.error(f"Evaluation failed for query '{example.query[:50]}...': {e}")
-            results.append(EvalResult(
-                example=example,
-                metrics=RAGEvalMetrics(),
-                error=str(e),
-                retrieval_time_ms=(time.perf_counter() - start_time) * 1000,
-            ))
+            results.append(
+                EvalResult(
+                    example=example,
+                    metrics=RAGEvalMetrics(),
+                    error=str(e),
+                    retrieval_time_ms=(time.perf_counter() - start_time) * 1000,
+                )
+            )
 
     # Aggregate results
     successful_results = [r for r in results if r.error is None]
@@ -692,15 +708,25 @@ async def run_evaluation_suite(
             "use_reranker": use_reranker,
             "embedding_model": settings.embedding_model,
             "category_filter": category,
-        }
+        },
     )
 
     if successful_results:
-        suite_result.avg_mrr = sum(r.metrics.mrr_at_k for r in successful_results) / len(successful_results)
-        suite_result.avg_recall = sum(r.metrics.recall_at_k for r in successful_results) / len(successful_results)
-        suite_result.avg_precision = sum(r.metrics.precision_at_k for r in successful_results) / len(successful_results)
-        suite_result.avg_similarity = sum(r.metrics.avg_similarity_score for r in successful_results) / len(successful_results)
-        suite_result.avg_keyword_hit_rate = sum(r.metrics.keyword_hit_rate for r in successful_results) / len(successful_results)
+        suite_result.avg_mrr = sum(
+            r.metrics.mrr_at_k for r in successful_results
+        ) / len(successful_results)
+        suite_result.avg_recall = sum(
+            r.metrics.recall_at_k for r in successful_results
+        ) / len(successful_results)
+        suite_result.avg_precision = sum(
+            r.metrics.precision_at_k for r in successful_results
+        ) / len(successful_results)
+        suite_result.avg_similarity = sum(
+            r.metrics.avg_similarity_score for r in successful_results
+        ) / len(successful_results)
+        suite_result.avg_keyword_hit_rate = sum(
+            r.metrics.keyword_hit_rate for r in successful_results
+        ) / len(successful_results)
         suite_result.avg_retrieval_time_ms = total_time_ms / len(results)
 
         # Compute by-category metrics
@@ -709,20 +735,41 @@ async def run_evaluation_suite(
             cat_results = [r for r in successful_results if r.example.category == cat]
             suite_result.by_category[cat] = {
                 "count": len(cat_results),
-                "avg_mrr": round(sum(r.metrics.mrr_at_k for r in cat_results) / len(cat_results), 4),
-                "avg_recall": round(sum(r.metrics.recall_at_k for r in cat_results) / len(cat_results), 4),
-                "avg_precision": round(sum(r.metrics.precision_at_k for r in cat_results) / len(cat_results), 4),
+                "avg_mrr": round(
+                    sum(r.metrics.mrr_at_k for r in cat_results) / len(cat_results), 4
+                ),
+                "avg_recall": round(
+                    sum(r.metrics.recall_at_k for r in cat_results) / len(cat_results),
+                    4,
+                ),
+                "avg_precision": round(
+                    sum(r.metrics.precision_at_k for r in cat_results)
+                    / len(cat_results),
+                    4,
+                ),
             }
 
         # Compute by-difficulty metrics
         difficulties = set(r.example.difficulty for r in successful_results)
         for diff in difficulties:
-            diff_results = [r for r in successful_results if r.example.difficulty == diff]
+            diff_results = [
+                r for r in successful_results if r.example.difficulty == diff
+            ]
             suite_result.by_difficulty[diff] = {
                 "count": len(diff_results),
-                "avg_mrr": round(sum(r.metrics.mrr_at_k for r in diff_results) / len(diff_results), 4),
-                "avg_recall": round(sum(r.metrics.recall_at_k for r in diff_results) / len(diff_results), 4),
-                "avg_precision": round(sum(r.metrics.precision_at_k for r in diff_results) / len(diff_results), 4),
+                "avg_mrr": round(
+                    sum(r.metrics.mrr_at_k for r in diff_results) / len(diff_results), 4
+                ),
+                "avg_recall": round(
+                    sum(r.metrics.recall_at_k for r in diff_results)
+                    / len(diff_results),
+                    4,
+                ),
+                "avg_precision": round(
+                    sum(r.metrics.precision_at_k for r in diff_results)
+                    / len(diff_results),
+                    4,
+                ),
             }
 
     return suite_result
@@ -755,6 +802,7 @@ def run_evaluation_suite_sync(
 # =============================================================================
 # Utility Functions
 # =============================================================================
+
 
 def get_evaluation_categories() -> List[str]:
     """Get list of unique categories in the seed dataset."""
@@ -822,37 +870,47 @@ def format_eval_report(result: EvalSuiteResult) -> str:
         lines.append(f"  {key}: {value}")
 
     if result.by_category:
-        lines.extend([
-            "",
-            "METRICS BY CATEGORY",
-            "-" * 40,
-        ])
+        lines.extend(
+            [
+                "",
+                "METRICS BY CATEGORY",
+                "-" * 40,
+            ]
+        )
         for cat, metrics in sorted(result.by_category.items()):
-            lines.append(f"  {cat} (n={metrics['count']}): "
-                        f"MRR={metrics['avg_mrr']:.3f}, "
-                        f"Recall={metrics['avg_recall']:.3f}, "
-                        f"Precision={metrics['avg_precision']:.3f}")
+            lines.append(
+                f"  {cat} (n={metrics['count']}): "
+                f"MRR={metrics['avg_mrr']:.3f}, "
+                f"Recall={metrics['avg_recall']:.3f}, "
+                f"Precision={metrics['avg_precision']:.3f}"
+            )
 
     if result.by_difficulty:
-        lines.extend([
-            "",
-            "METRICS BY DIFFICULTY",
-            "-" * 40,
-        ])
+        lines.extend(
+            [
+                "",
+                "METRICS BY DIFFICULTY",
+                "-" * 40,
+            ]
+        )
         for diff, metrics in sorted(result.by_difficulty.items()):
-            lines.append(f"  {diff} (n={metrics['count']}): "
-                        f"MRR={metrics['avg_mrr']:.3f}, "
-                        f"Recall={metrics['avg_recall']:.3f}, "
-                        f"Precision={metrics['avg_precision']:.3f}")
+            lines.append(
+                f"  {diff} (n={metrics['count']}): "
+                f"MRR={metrics['avg_mrr']:.3f}, "
+                f"Recall={metrics['avg_recall']:.3f}, "
+                f"Precision={metrics['avg_precision']:.3f}"
+            )
 
     # Add failed examples if any
     failed = [r for r in result.individual_results if r.error]
     if failed:
-        lines.extend([
-            "",
-            "FAILED EVALUATIONS",
-            "-" * 40,
-        ])
+        lines.extend(
+            [
+                "",
+                "FAILED EVALUATIONS",
+                "-" * 40,
+            ]
+        )
         for r in failed:
             lines.append(f"  - {r.example.query[:50]}...: {r.error}")
 

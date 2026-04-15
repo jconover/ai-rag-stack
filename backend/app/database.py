@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     """Base class for SQLAlchemy ORM models."""
+
     pass
 
 
@@ -216,9 +217,9 @@ async def get_postgres_pool_stats() -> dict:
             "database": settings.postgres_db,
             "pool_size": settings.postgres_pool_size,
             "max_overflow": settings.postgres_max_overflow,
-            "checked_in": pool.checkedin() if hasattr(pool, 'checkedin') else None,
-            "checked_out": pool.checkedout() if hasattr(pool, 'checkedout') else None,
-            "overflow": pool.overflow() if hasattr(pool, 'overflow') else None,
+            "checked_in": pool.checkedin() if hasattr(pool, "checkedin") else None,
+            "checked_out": pool.checkedout() if hasattr(pool, "checkedout") else None,
+            "overflow": pool.overflow() if hasattr(pool, "overflow") else None,
             "pool_timeout": settings.postgres_pool_timeout,
         }
     except Exception as e:

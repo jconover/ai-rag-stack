@@ -36,7 +36,7 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CacheEntry:
     """A cached response entry with metadata."""
+
     query_hash: str
     response: str
     context_hash: str
@@ -62,6 +63,7 @@ class CacheEntry:
 @dataclass
 class CacheStats:
     """Statistics for semantic cache performance."""
+
     hits: int = 0
     misses: int = 0
     stores: int = 0
@@ -122,9 +124,7 @@ class SemanticResponseCache:
             else settings.semantic_cache_threshold
         )
         self.ttl_seconds = (
-            ttl_seconds
-            if ttl_seconds is not None
-            else settings.semantic_cache_ttl
+            ttl_seconds if ttl_seconds is not None else settings.semantic_cache_ttl
         )
 
         self._enabled = settings.semantic_cache_enabled
@@ -166,6 +166,7 @@ class SemanticResponseCache:
         if self._embeddings is None:
             try:
                 from app.vectorstore import get_shared_embeddings
+
                 self._embeddings = get_shared_embeddings()
             except Exception as e:
                 logger.error(f"Failed to load embedding model for semantic cache: {e}")
@@ -185,7 +186,7 @@ class SemanticResponseCache:
         Returns:
             16-character hex hash of the query
         """
-        return hashlib.md5(query.encode('utf-8')).hexdigest()[:16]
+        return hashlib.md5(query.encode("utf-8")).hexdigest()[:16]
 
     def _compute_embedding(self, query: str) -> Optional[List[float]]:
         """Compute embedding vector for a query.
@@ -202,8 +203,10 @@ class SemanticResponseCache:
 
         try:
             # Use BGE instruction prefix for consistency with vectorstore
-            if 'bge' in settings.embedding_model.lower():
-                prefixed_query = f"Represent this sentence for searching relevant passages: {query}"
+            if "bge" in settings.embedding_model.lower():
+                prefixed_query = (
+                    f"Represent this sentence for searching relevant passages: {query}"
+                )
             else:
                 prefixed_query = query
 
@@ -213,11 +216,7 @@ class SemanticResponseCache:
             self._stats.errors += 1
             return None
 
-    def _cosine_similarity(
-        self,
-        vec1: List[float],
-        vec2: List[float]
-    ) -> float:
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """Compute cosine similarity between two vectors.
 
         Args:
@@ -255,14 +254,20 @@ class SemanticResponseCache:
 
             results = []
             for hash_bytes in index_data:
-                query_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else hash_bytes
+                query_hash = (
+                    hash_bytes.decode("utf-8")
+                    if isinstance(hash_bytes, bytes)
+                    else hash_bytes
+                )
                 emb_key = f"{self.EMB_PREFIX}{query_hash}"
                 emb_data = self._redis_client.get(emb_key)
 
                 if emb_data:
                     try:
                         embedding = json.loads(
-                            emb_data.decode('utf-8') if isinstance(emb_data, bytes) else emb_data
+                            emb_data.decode("utf-8")
+                            if isinstance(emb_data, bytes)
+                            else emb_data
                         )
                         results.append((query_hash, embedding))
                     except json.JSONDecodeError:
@@ -277,9 +282,7 @@ class SemanticResponseCache:
             return []
 
     def _find_similar_query(
-        self,
-        query_embedding: List[float],
-        context_hash: str
+        self, query_embedding: List[float], context_hash: str
     ) -> Optional[Tuple[str, float]]:
         """Find the most similar cached query above threshold.
 
@@ -305,9 +308,11 @@ class SemanticResponseCache:
             if meta_data:
                 try:
                     metadata = json.loads(
-                        meta_data.decode('utf-8') if isinstance(meta_data, bytes) else meta_data
+                        meta_data.decode("utf-8")
+                        if isinstance(meta_data, bytes)
+                        else meta_data
                     )
-                    cached_context_hash = metadata.get('context_hash', '')
+                    cached_context_hash = metadata.get("context_hash", "")
 
                     # Skip if context hash doesn't match
                     if cached_context_hash != context_hash:
@@ -325,11 +330,7 @@ class SemanticResponseCache:
 
         return best_match
 
-    def get(
-        self,
-        query: str,
-        context_hash: str
-    ) -> Optional[str]:
+    def get(self, query: str, context_hash: str) -> Optional[str]:
         """Check if semantically similar query was already answered.
 
         Searches cached queries for one with:
@@ -379,7 +380,7 @@ class SemanticResponseCache:
                 return None
 
             response_text = (
-                cached_response.decode('utf-8')
+                cached_response.decode("utf-8")
                 if isinstance(cached_response, bytes)
                 else cached_response
             )
@@ -409,11 +410,7 @@ class SemanticResponseCache:
             return None
 
     def put(
-        self,
-        query: str,
-        context_hash: str,
-        response: str,
-        model: str = ""
+        self, query: str, context_hash: str, response: str, model: str = ""
     ) -> bool:
         """Store response with semantic indexing.
 
@@ -442,10 +439,10 @@ class SemanticResponseCache:
 
             # Prepare metadata
             metadata = {
-                'context_hash': context_hash,
-                'model': model,
-                'timestamp': time.time(),
-                'query_preview': query[:100],
+                "context_hash": context_hash,
+                "model": model,
+                "timestamp": time.time(),
+                "query_preview": query[:100],
             }
 
             # Store in Redis with pipeline for atomicity
@@ -464,7 +461,7 @@ class SemanticResponseCache:
 
             # Store response
             resp_key = f"{self.RESP_PREFIX}{query_hash}"
-            pipe.setex(resp_key, self.ttl_seconds, response.encode('utf-8'))
+            pipe.setex(resp_key, self.ttl_seconds, response.encode("utf-8"))
 
             pipe.execute()
 
@@ -511,9 +508,13 @@ class SemanticResponseCache:
         self._lookup_time_sum_ms += lookup_time_ms
         self._lookup_count += 1
         if self._lookup_count > 0:
-            self._stats.avg_lookup_time_ms = self._lookup_time_sum_ms / self._lookup_count
+            self._stats.avg_lookup_time_ms = (
+                self._lookup_time_sum_ms / self._lookup_count
+            )
         if self._stats.hits > 0:
-            self._stats.avg_similarity_on_hit = self._similarity_sum_on_hits / self._stats.hits
+            self._stats.avg_similarity_on_hit = (
+                self._similarity_sum_on_hits / self._stats.hits
+            )
 
     def clear(self) -> int:
         """Clear all semantic cache entries from Redis.
@@ -535,7 +536,11 @@ class SemanticResponseCache:
             # Delete all entries
             pipe = self._redis_client.pipeline()
             for hash_bytes in index_data:
-                query_hash = hash_bytes.decode('utf-8') if isinstance(hash_bytes, bytes) else hash_bytes
+                query_hash = (
+                    hash_bytes.decode("utf-8")
+                    if isinstance(hash_bytes, bytes)
+                    else hash_bytes
+                )
                 pipe.delete(f"{self.EMB_PREFIX}{query_hash}")
                 pipe.delete(f"{self.META_PREFIX}{query_hash}")
                 pipe.delete(f"{self.RESP_PREFIX}{query_hash}")
@@ -574,19 +579,19 @@ class SemanticResponseCache:
         self._stats.total_entries = total_entries
 
         return {
-            'enabled': self._enabled,
-            'connected': self._redis_client is not None,
-            'similarity_threshold': self.similarity_threshold,
-            'ttl_seconds': self.ttl_seconds,
-            'hits': self._stats.hits,
-            'misses': self._stats.misses,
-            'stores': self._stats.stores,
-            'evictions': self._stats.evictions,
-            'errors': self._stats.errors,
-            'hit_rate': round(self._stats.hit_rate, 4),
-            'avg_similarity_on_hit': round(self._stats.avg_similarity_on_hit, 4),
-            'avg_lookup_time_ms': round(self._stats.avg_lookup_time_ms, 2),
-            'total_entries': total_entries,
+            "enabled": self._enabled,
+            "connected": self._redis_client is not None,
+            "similarity_threshold": self.similarity_threshold,
+            "ttl_seconds": self.ttl_seconds,
+            "hits": self._stats.hits,
+            "misses": self._stats.misses,
+            "stores": self._stats.stores,
+            "evictions": self._stats.evictions,
+            "errors": self._stats.errors,
+            "hit_rate": round(self._stats.hit_rate, 4),
+            "avg_similarity_on_hit": round(self._stats.avg_similarity_on_hit, 4),
+            "avg_lookup_time_ms": round(self._stats.avg_lookup_time_ms, 2),
+            "total_entries": total_entries,
         }
 
     def is_connected(self) -> bool:
@@ -624,10 +629,10 @@ def compute_context_hash(documents: List[Any]) -> str:
     # Hash based on document content and sources
     content_parts = []
     for doc in documents:
-        source = doc.metadata.get('source', '')
+        source = doc.metadata.get("source", "")
         # Use first 200 chars of content to avoid huge strings
-        content_preview = doc.page_content[:200] if doc.page_content else ''
+        content_preview = doc.page_content[:200] if doc.page_content else ""
         content_parts.append(f"{source}:{content_preview}")
 
     combined = "|".join(content_parts)
-    return hashlib.md5(combined.encode('utf-8')).hexdigest()
+    return hashlib.md5(combined.encode("utf-8")).hexdigest()

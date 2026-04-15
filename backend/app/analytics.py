@@ -18,7 +18,7 @@ import time
 import threading
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Deque, Tuple
 import logging
@@ -34,6 +34,7 @@ MAX_TOP_QUERIES = 50  # Maximum number of top queries to track
 @dataclass
 class RequestRecord:
     """Record of a single request for metrics aggregation."""
+
     timestamp: float
     latency_ms: float
     model: str
@@ -48,6 +49,7 @@ class RequestRecord:
 @dataclass
 class QueryRecord:
     """Anonymized query record for top queries tracking."""
+
     query_hash: str
     timestamp: float
     count: int = 1
@@ -136,7 +138,9 @@ class MetricsCollector:
         self._latencies_lock = threading.Lock()
 
         # Retrieval quality scores
-        self._similarity_scores: Deque[Tuple[float, float]] = deque()  # (timestamp, score)
+        self._similarity_scores: Deque[Tuple[float, float]] = (
+            deque()
+        )  # (timestamp, score)
         self._scores_lock = threading.Lock()
 
         logger.info(
@@ -254,10 +258,7 @@ class MetricsCollector:
 
             # Prune old queries outside long window
             cutoff = time.time() - self.long_window
-            expired = [
-                k for k, v in self._query_counts.items()
-                if v.last_seen < cutoff
-            ]
+            expired = [k for k, v in self._query_counts.items() if v.last_seen < cutoff]
             for k in expired:
                 del self._query_counts[k]
 
@@ -265,9 +266,7 @@ class MetricsCollector:
             if len(self._query_counts) > MAX_TOP_QUERIES * 2:
                 # Keep only top queries by count
                 sorted_queries = sorted(
-                    self._query_counts.items(),
-                    key=lambda x: x[1].count,
-                    reverse=True
+                    self._query_counts.items(), key=lambda x: x[1].count, reverse=True
                 )
                 self._query_counts = dict(sorted_queries[:MAX_TOP_QUERIES])
 
@@ -306,7 +305,7 @@ class MetricsCollector:
                     "max_ms": None,
                 }
 
-            latencies = [l[1] for l in self._latencies]
+            latencies = [entry[1] for entry in self._latencies]
             sorted_latencies = sorted(latencies)
             n = len(sorted_latencies)
 
@@ -346,15 +345,12 @@ class MetricsCollector:
             # Prune old queries
             cutoff = time.time() - self.long_window
             self._query_counts = {
-                k: v for k, v in self._query_counts.items()
-                if v.last_seen >= cutoff
+                k: v for k, v in self._query_counts.items() if v.last_seen >= cutoff
             }
 
             # Sort by count and return top N
             sorted_queries = sorted(
-                self._query_counts.values(),
-                key=lambda x: x.count,
-                reverse=True
+                self._query_counts.values(), key=lambda x: x.count, reverse=True
             )[:limit]
 
             return [
@@ -381,9 +377,7 @@ class MetricsCollector:
                     "percentage": round((count / total) * 100, 2),
                 }
                 for model, count in sorted(
-                    self._model_usage.items(),
-                    key=lambda x: x[1],
-                    reverse=True
+                    self._model_usage.items(), key=lambda x: x[1], reverse=True
                 )
             }
 
@@ -514,7 +508,9 @@ async def log_model_deployment(
         return {
             "id": deployment.id,
             "model_name": deployment.model_name,
-            "deployed_at": deployment.deployed_at.isoformat() if deployment.deployed_at else None,
+            "deployed_at": deployment.deployed_at.isoformat()
+            if deployment.deployed_at
+            else None,
             "deployed_by": deployment.deployed_by,
             "is_active": deployment.is_active,
             "notes": deployment.notes,
@@ -604,7 +600,9 @@ async def get_active_deployment() -> Optional[Dict[str, Any]]:
         return {
             "id": deployment.id,
             "model_name": deployment.model_name,
-            "deployed_at": deployment.deployed_at.isoformat() if deployment.deployed_at else None,
+            "deployed_at": deployment.deployed_at.isoformat()
+            if deployment.deployed_at
+            else None,
             "deployed_by": deployment.deployed_by,
             "is_active": deployment.is_active,
             "notes": deployment.notes,
@@ -675,16 +673,14 @@ async def get_model_deployment_stats() -> Dict[str, Any]:
 
     async with get_db_context() as db:
         # Total deployments
-        total_result = await db.execute(
-            select(func.count(ModelDeployment.id))
-        )
+        total_result = await db.execute(select(func.count(ModelDeployment.id)))
         total_deployments = total_result.scalar() or 0
 
         # Deployments by model
         model_counts_result = await db.execute(
             select(
                 ModelDeployment.model_name,
-                func.count(ModelDeployment.id).label("count")
+                func.count(ModelDeployment.id).label("count"),
             )
             .group_by(ModelDeployment.model_name)
             .order_by(func.count(ModelDeployment.id).desc())
@@ -708,7 +704,11 @@ async def get_model_deployment_stats() -> Dict[str, Any]:
             "deployments_by_model": model_counts,
             "most_recent_deployment": {
                 "model_name": recent.model_name,
-                "deployed_at": recent.deployed_at.isoformat() if recent and recent.deployed_at else None,
+                "deployed_at": recent.deployed_at.isoformat()
+                if recent and recent.deployed_at
+                else None,
                 "deployed_by": recent.deployed_by if recent else None,
-            } if recent else None,
+            }
+            if recent
+            else None,
         }

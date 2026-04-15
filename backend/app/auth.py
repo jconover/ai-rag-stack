@@ -243,9 +243,7 @@ class AuthService:
         email_normalized = email.lower().strip()
 
         # Check for existing email
-        result = await db.execute(
-            select(User).where(User.email == email_normalized)
-        )
+        result = await db.execute(select(User).where(User.email == email_normalized))
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -253,9 +251,7 @@ class AuthService:
             )
 
         # Check for existing username
-        result = await db.execute(
-            select(User).where(User.username == username)
-        )
+        result = await db.execute(select(User).where(User.username == username))
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -403,8 +399,7 @@ class AuthService:
 
         # Find valid session
         result = await db.execute(
-            select(UserSession)
-            .where(
+            select(UserSession).where(
                 and_(
                     UserSession.token_hash == token_hash,
                     UserSession.expires_at > now,
@@ -420,9 +415,7 @@ class AuthService:
             )
 
         # Get the user and check if active
-        result = await db.execute(
-            select(User).where(User.id == session.user_id)
-        )
+        result = await db.execute(select(User).where(User.id == session.user_id))
         user = result.scalar_one_or_none()
 
         if not user or not user.is_active:
@@ -497,7 +490,7 @@ class AuthService:
                 and_(
                     APIKey.user_id == user_id,
                     APIKey.name == name,
-                    APIKey.is_active == True,
+                    APIKey.is_active,
                 )
             )
         )
@@ -555,7 +548,7 @@ class AuthService:
             select(APIKey).where(
                 and_(
                     APIKey.key_hash == key_hash,
-                    APIKey.is_active == True,
+                    APIKey.is_active,
                 )
             )
         )
@@ -575,9 +568,7 @@ class AuthService:
             )
 
         # Get the user
-        result = await db.execute(
-            select(User).where(User.id == api_key.user_id)
-        )
+        result = await db.execute(select(User).where(User.id == api_key.user_id))
         user = result.scalar_one_or_none()
 
         if not user or not user.is_active:
@@ -617,7 +608,7 @@ class AuthService:
         query = select(APIKey).where(
             and_(
                 APIKey.id == key_id,
-                APIKey.is_active == True,
+                APIKey.is_active,
             )
         )
 
@@ -715,7 +706,9 @@ async def get_current_user(
 
 
 async def get_optional_user(
-    authorization: Optional[str] = Header(None, description="Optional Bearer token or API key"),
+    authorization: Optional[str] = Header(
+        None, description="Optional Bearer token or API key"
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """FastAPI dependency for routes with optional authentication.

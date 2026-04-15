@@ -10,6 +10,7 @@ This module implements a production-ready RAG pipeline with:
 Flow:
     Query -> Vector Search (top 20) -> Rerank (top 5) -> Build Context -> LLM
 """
+
 import asyncio
 import logging
 import re
@@ -23,24 +24,25 @@ from app.config import settings
 from app.vectorstore import vector_store
 from app.reranker import rerank_documents, get_reranker
 from app.llm_provider import get_llm_provider
-from app.metrics import retrieval_metrics_logger, RetrievalTimer, RetrievalMetrics
+from app.metrics import retrieval_metrics_logger, RetrievalMetrics
 from app.query_expansion import hyde_expander
 from app.web_search import web_searcher
 from app.conversation_context import conversation_expander
 from app.circuit_breaker import (
     ollama_circuit_breaker,
     CircuitBreakerOpen,
-    is_circuit_breaker_exception,
     get_service_unavailable_message,
 )
 from app.output_validation import validate_response, ValidationResult
-from app.tracing import get_tracer, create_span, SpanAttributes
+from app.tracing import get_tracer, SpanAttributes
 from app.drift_detection import drift_detector
 
 logger = logging.getLogger(__name__)
 
 
-def _split_messages_for_provider(messages: List[Dict[str, str]]) -> Tuple[Optional[str], str]:
+def _split_messages_for_provider(
+    messages: List[Dict[str, str]],
+) -> Tuple[Optional[str], str]:
     """Split a chat ``messages`` list into (system, user_prompt) for the LLM provider.
 
     Multiple user/assistant turns are concatenated; only the first system message
@@ -66,9 +68,17 @@ def _split_messages_for_provider(messages: List[Dict[str, str]]) -> Tuple[Option
 COMPLEXITY_INDICATORS = {
     "long_query": lambda q: len(q.split()) > 20,
     "multiple_requirements": lambda q: q.count(" and ") >= 2 or q.count(",") >= 3,
-    "multi_step": lambda q: bool(re.search(r"\b(step|steps|process|workflow|pipeline|then|after|before)\b", q, re.I)),
-    "conditional": lambda q: bool(re.search(r"\b(if|when|unless|depending|based on)\b", q, re.I)),
-    "comparison": lambda q: bool(re.search(r"\b(compare|vs|versus|difference|better|which)\b", q, re.I)),
+    "multi_step": lambda q: bool(
+        re.search(
+            r"\b(step|steps|process|workflow|pipeline|then|after|before)\b", q, re.I
+        )
+    ),
+    "conditional": lambda q: bool(
+        re.search(r"\b(if|when|unless|depending|based on)\b", q, re.I)
+    ),
+    "comparison": lambda q: bool(
+        re.search(r"\b(compare|vs|versus|difference|better|which)\b", q, re.I)
+    ),
 }
 
 
@@ -120,16 +130,16 @@ Think through this step-by-step, then provide your answer:"""
 # Model-specific context window limits (tokens)
 # Using ~75% of actual limit to leave room for response generation
 MODEL_CONTEXT_LIMITS = {
-    "llama3.1": 96000,      # 128K context * 0.75
-    "llama3.2": 96000,      # 128K context * 0.75
-    "llama3": 6144,         # 8K context * 0.75
-    "mistral": 24576,       # 32K context * 0.75
-    "mixtral": 24576,       # 32K context * 0.75
-    "qwen2.5": 24576,       # 32K context * 0.75
-    "qwen2.5-coder": 24576, # 32K context * 0.75
-    "codellama": 12288,     # 16K context * 0.75
-    "deepseek": 24576,      # 32K context * 0.75
-    "phi": 3072,            # 4K context * 0.75
+    "llama3.1": 96000,  # 128K context * 0.75
+    "llama3.2": 96000,  # 128K context * 0.75
+    "llama3": 6144,  # 8K context * 0.75
+    "mistral": 24576,  # 32K context * 0.75
+    "mixtral": 24576,  # 32K context * 0.75
+    "qwen2.5": 24576,  # 32K context * 0.75
+    "qwen2.5-coder": 24576,  # 32K context * 0.75
+    "codellama": 12288,  # 16K context * 0.75
+    "deepseek": 24576,  # 32K context * 0.75
+    "phi": 3072,  # 4K context * 0.75
 }
 
 # Default context token budget (fallback for unknown models)
@@ -181,7 +191,7 @@ kubectl logs --previous <pod-name>
 kubectl logs <pod-name> -c <container-name>
 ```
 
-[Source 1] The `-f` flag follows the log output similar to `tail -f`."""
+[Source 1] The `-f` flag follows the log output similar to `tail -f`.""",
     },
     "docker": {
         "query": "How do I build a Docker image?",
@@ -199,7 +209,7 @@ docker build -f Dockerfile.prod -t myimage:prod .
 docker build --build-arg VERSION=1.0 -t myimage:1.0 .
 ```
 
-[Source 1] Always tag images with meaningful versions for traceability."""
+[Source 1] Always tag images with meaningful versions for traceability.""",
     },
     "terraform": {
         "query": "How do I initialize Terraform?",
@@ -217,7 +227,7 @@ terraform init -upgrade
 terraform init -reconfigure
 ```
 
-[Source 1] Run `terraform init` whenever you add new providers or modules."""
+[Source 1] Run `terraform init` whenever you add new providers or modules.""",
     },
     "ansible": {
         "query": "How do I run an Ansible playbook?",
@@ -238,7 +248,7 @@ ansible-playbook playbook.yml --check
 ansible-playbook playbook.yml -e "env=production"
 ```
 
-[Source 1] Use `--check` mode to preview changes before applying them."""
+[Source 1] Use `--check` mode to preview changes before applying them.""",
     },
     "helm": {
         "query": "How do I install a Helm chart?",
@@ -259,7 +269,7 @@ helm install my-release bitnami/nginx --namespace production --create-namespace
 helm install my-release bitnami/nginx --set replicaCount=3
 ```
 
-[Source 1] Use `-f values.yaml` to customize chart configuration."""
+[Source 1] Use `-f values.yaml` to customize chart configuration.""",
     },
     "cicd": {
         "query": "How do I set up a GitHub Actions workflow?",
@@ -287,7 +297,7 @@ jobs:
           npm test
 ```
 
-[Source 1] Workflows trigger on events like `push` and `pull_request`."""
+[Source 1] Workflows trigger on events like `push` and `pull_request`.""",
     },
 }
 
@@ -295,17 +305,86 @@ jobs:
 # Maps keyword patterns to few-shot example keys
 FEW_SHOT_DOMAIN_PATTERNS = [
     # Kubernetes
-    (["kubernetes", "k8s", "kubectl", "pod", "deployment", "service", "ingress", "namespace", "configmap", "secret", "pvc", "pv", "statefulset", "daemonset", "replicaset"], "kubernetes"),
+    (
+        [
+            "kubernetes",
+            "k8s",
+            "kubectl",
+            "pod",
+            "deployment",
+            "service",
+            "ingress",
+            "namespace",
+            "configmap",
+            "secret",
+            "pvc",
+            "pv",
+            "statefulset",
+            "daemonset",
+            "replicaset",
+        ],
+        "kubernetes",
+    ),
     # Docker
-    (["docker", "dockerfile", "container", "image", "docker-compose", "docker compose"], "docker"),
+    (
+        [
+            "docker",
+            "dockerfile",
+            "container",
+            "image",
+            "docker-compose",
+            "docker compose",
+        ],
+        "docker",
+    ),
     # Terraform
-    (["terraform", "tf", "hcl", "tfstate", "tfvars", "provider", "resource", "module"], "terraform"),
+    (
+        [
+            "terraform",
+            "tf",
+            "hcl",
+            "tfstate",
+            "tfvars",
+            "provider",
+            "resource",
+            "module",
+        ],
+        "terraform",
+    ),
     # Ansible
-    (["ansible", "playbook", "ansible-playbook", "inventory", "role", "task", "handler", "ansible-vault"], "ansible"),
+    (
+        [
+            "ansible",
+            "playbook",
+            "ansible-playbook",
+            "inventory",
+            "role",
+            "task",
+            "handler",
+            "ansible-vault",
+        ],
+        "ansible",
+    ),
     # Helm
-    (["helm", "chart", "values.yaml", "helmfile", "helm install", "helm upgrade"], "helm"),
+    (
+        ["helm", "chart", "values.yaml", "helmfile", "helm install", "helm upgrade"],
+        "helm",
+    ),
     # CI/CD
-    (["github actions", "gitlab ci", "jenkins", "pipeline", "workflow", "ci/cd", "cicd", "build pipeline", "deploy pipeline"], "cicd"),
+    (
+        [
+            "github actions",
+            "gitlab ci",
+            "jenkins",
+            "pipeline",
+            "workflow",
+            "ci/cd",
+            "cicd",
+            "build pipeline",
+            "deploy pipeline",
+        ],
+        "cicd",
+    ),
 ]
 
 
@@ -322,7 +401,7 @@ TASK TYPE: Code Generation
 - Include all necessary imports and dependencies
 - Add brief comments for non-obvious logic
 - Show the command to run/test if applicable
-"""
+""",
     },
     "explain": {
         "patterns": [
@@ -335,7 +414,7 @@ TASK TYPE: Explanation
 - Start with a one-sentence summary
 - Use concrete examples to illustrate concepts
 - Reference specific documentation sources when available
-"""
+""",
     },
     "debug": {
         "patterns": [
@@ -348,7 +427,7 @@ TASK TYPE: Debugging
 - Provide diagnostic commands to gather more info
 - Suggest fixes in order of likelihood
 - Explain WHY the fix works
-"""
+""",
     },
     "compare": {
         "patterns": [
@@ -360,14 +439,14 @@ TASK TYPE: Comparison
 - Use a structured format (table or bullet points)
 - Cover: use cases, pros, cons, complexity
 - Give a clear recommendation for common scenarios
-"""
+""",
     },
 }
 
 _TASK_TYPE_COMPILED = {
     task_type: {
         "patterns": [re.compile(p, re.IGNORECASE) for p in config["patterns"]],
-        "instruction": config["instruction"]
+        "instruction": config["instruction"],
     }
     for task_type, config in TASK_TYPE_PATTERNS.items()
 }
@@ -395,7 +474,9 @@ def select_few_shot_example(query: str) -> Optional[Dict[str, str]]:
                 example = FEW_SHOT_EXAMPLES.get(domain)
                 if example:
                     if settings.log_retrieval_details:
-                        logger.info(f"Selected few-shot example for domain: {domain} (matched: '{keyword}')")
+                        logger.info(
+                            f"Selected few-shot example for domain: {domain} (matched: '{keyword}')"
+                        )
                     return example
 
     return None
@@ -404,6 +485,7 @@ def select_few_shot_example(query: str) -> Optional[Dict[str, str]]:
 @dataclass
 class RetrievalResult:
     """Container for retrieval results with scores and performance metrics."""
+
     documents: List[Any] = field(default_factory=list)
     similarity_scores: List[float] = field(default_factory=list)
     rerank_scores: List[float] = field(default_factory=list)
@@ -462,7 +544,7 @@ class RAGPipeline:
         self,
         documents: List,
         web_context: str = "",
-        max_context_tokens: Optional[int] = None
+        max_context_tokens: Optional[int] = None,
     ) -> str:
         """Format retrieved documents into context string with optional truncation.
 
@@ -493,8 +575,8 @@ class RAGPipeline:
 
         # Add local document context in order of relevance (higher-ranked first)
         for i, doc in enumerate(documents, 1):
-            source = doc.metadata.get('source', 'Unknown')
-            source_type = doc.metadata.get('source_type', 'Unknown')
+            doc.metadata.get("source", "Unknown")
+            source_type = doc.metadata.get("source_type", "Unknown")
             content = doc.page_content.strip()
 
             doc_text = f"[Source {i} - {source_type}]\n{content}\n"
@@ -517,7 +599,9 @@ class RAGPipeline:
                     # Estimate characters from tokens (reverse of _count_tokens)
                     remaining_chars = remaining_tokens * 4
                     header = f"[Source {i} - {source_type}]\n"
-                    content_budget = remaining_chars - len(header) - 20  # -20 for safety margin
+                    content_budget = (
+                        remaining_chars - len(header) - 20
+                    )  # -20 for safety margin
 
                     if content_budget > 100:
                         truncated_content = content[:content_budget] + "..."
@@ -542,7 +626,7 @@ class RAGPipeline:
                 return f"--- Web Search Results ---\n\n{web_context}"
 
         return local_context
-    
+
     # Model-specific system prompts optimized for different LLM families
     # Each prompt is tailored to the model's instruction-following style and known strengths
     MODEL_SPECIFIC_PROMPTS = {
@@ -571,7 +655,6 @@ BOUNDARIES:
 - Decline off-topic requests politely, redirect to DevOps questions
 - Never assist with unauthorized access or security exploitation
 - When uncertain, acknowledge limitations""",
-
         # Mistral/Mixtral family - Efficient, good at concise responses
         # Optimized for their instruction format and speed
         "mistral": """[INST] You are an expert DevOps engineer assistant. Provide concise, accurate technical guidance.
@@ -591,7 +674,6 @@ Format requirements:
 Scope: DevOps, infrastructure, cloud, CI/CD, containers, monitoring, automation
 Decline: Off-topic requests, security exploits, unauthorized access guidance
 Uncertainty: Acknowledge when unsure [/INST]""",
-
         # Qwen family - Strong multilingual, good at detailed explanations
         # Optimized for their training style emphasizing helpful, detailed responses
         "qwen": """<|im_start|>system
@@ -616,7 +698,6 @@ NOT ALLOWED: Non-technical topics, security exploitation, unauthorized access
 ### When Uncertain:
 State limitations clearly and suggest alternative resources if appropriate.
 <|im_end|>""",
-
         # Default fallback for unknown models - Generic but effective
         "default": """You are an expert DevOps engineer assistant. Your role is to help users with DevOps, infrastructure, and programming questions.
 
@@ -641,7 +722,7 @@ State limitations clearly and suggest alternative resources if appropriate.
 - Only answer questions related to DevOps, infrastructure, cloud computing, CI/CD, containerization, orchestration, monitoring, and related technical topics
 - For off-topic requests (personal advice, creative writing, general trivia, etc.), politely decline and redirect the user to ask DevOps-related questions
 - Do not provide assistance with malicious activities such as unauthorized access, exploiting vulnerabilities, or bypassing security controls
-- If a question is ambiguous, interpret it in the context of DevOps best practices"""
+- If a question is ambiguous, interpret it in the context of DevOps best practices""",
     }
 
     # Model family detection patterns - maps regex patterns to prompt keys
@@ -694,11 +775,15 @@ State limitations clearly and suggest alternative resources if appropriate.
             for pattern in config["patterns"]:
                 if pattern.search(query):
                     if settings.log_retrieval_details:
-                        logger.info(f"Detected task type: {task_type} for query: '{query[:50]}...'")
+                        logger.info(
+                            f"Detected task type: {task_type} for query: '{query[:50]}...'"
+                        )
                     return task_type, config["instruction"]
         return "general", ""
 
-    def _get_system_prompt(self, model: Optional[str] = None, query: Optional[str] = None) -> str:
+    def _get_system_prompt(
+        self, model: Optional[str] = None, query: Optional[str] = None
+    ) -> str:
         """Get the system prompt optimized for the specified model family.
 
         Auto-detects model family from the model name and returns an
@@ -717,14 +802,20 @@ State limitations clearly and suggest alternative resources if appropriate.
         """
         model = model or self.default_model
         family = self._detect_model_family(model)
-        prompt = self.MODEL_SPECIFIC_PROMPTS.get(family, self.MODEL_SPECIFIC_PROMPTS["default"])
+        prompt = self.MODEL_SPECIFIC_PROMPTS.get(
+            family, self.MODEL_SPECIFIC_PROMPTS["default"]
+        )
 
         # Log the model family detection for observability
         if settings.log_retrieval_details:
             if family != "default":
-                logger.info(f"Using {family}-optimized system prompt for model: {model}")
+                logger.info(
+                    f"Using {family}-optimized system prompt for model: {model}"
+                )
             else:
-                logger.info(f"Using default system prompt for unrecognized model: {model}")
+                logger.info(
+                    f"Using default system prompt for unrecognized model: {model}"
+                )
 
         # Detect task type and inject specialized instructions if query provided
         if query:
@@ -760,7 +851,9 @@ State limitations clearly and suggest alternative resources if appropriate.
         complexity_score = _get_complexity_score(query)
 
         if settings.log_retrieval_details:
-            logger.info(f"Query complexity score: {complexity_score}/5, using CoT scaffold")
+            logger.info(
+                f"Query complexity score: {complexity_score}/5, using CoT scaffold"
+            )
 
         if complexity_score >= 3:
             return COT_SCAFFOLD
@@ -778,7 +871,9 @@ Question: {query}{cot_scaffold}"""
         else:
             return f"{query}{cot_scaffold}"
 
-    def _build_messages(self, query: str, context: str, model: Optional[str] = None) -> List[Dict[str, str]]:
+    def _build_messages(
+        self, query: str, context: str, model: Optional[str] = None
+    ) -> List[Dict[str, str]]:
         """Build messages list with proper system/user role separation.
 
         Optionally includes few-shot examples as user/assistant message pairs
@@ -795,7 +890,7 @@ Question: {query}{cot_scaffold}"""
             List of message dictionaries with system, user, and optional assistant roles
         """
         messages = [
-            {'role': 'system', 'content': self._get_system_prompt(model, query)},
+            {"role": "system", "content": self._get_system_prompt(model, query)},
         ]
 
         # Add few-shot example if enabled and relevant example found
@@ -804,22 +899,23 @@ Question: {query}{cot_scaffold}"""
             if example:
                 # Build example user prompt in same format as real queries
                 example_user_prompt = self._get_user_prompt(
-                    query=example['query'],
-                    context=example['context']
+                    query=example["query"], context=example["context"]
                 )
-                messages.append({'role': 'user', 'content': example_user_prompt})
-                messages.append({'role': 'assistant', 'content': example['response']})
+                messages.append({"role": "user", "content": example_user_prompt})
+                messages.append({"role": "assistant", "content": example["response"]})
 
         # Add actual user query
-        messages.append({'role': 'user', 'content': self._get_user_prompt(query, context)})
+        messages.append(
+            {"role": "user", "content": self._get_user_prompt(query, context)}
+        )
 
         return messages
-    
+
     def _retrieve_with_scores(
         self,
         query: str,
         model: str = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> RetrievalResult:
         """Retrieve documents with similarity scores and optional reranking.
 
@@ -856,7 +952,9 @@ Question: {query}{cot_scaffold}"""
         # This resolves pronouns and references like "it", "that", "the same thing"
         search_query = query
         if settings.conversation_context_enabled and conversation_history:
-            context_result = conversation_expander.expand_query(query, conversation_history)
+            context_result = conversation_expander.expand_query(
+                query, conversation_history
+            )
             if context_result.expanded:
                 result.original_query = query
                 search_query = context_result.expanded_query
@@ -883,49 +981,71 @@ Question: {query}{cot_scaffold}"""
                     search_query = hyde_result.hypothetical_document
                     result.hyde_used = True
                     hyde_span.set_attribute(SpanAttributes.HYDE_USED, True)
-                    hyde_span.set_attribute(SpanAttributes.HYDE_TIME_MS, result.hyde_time_ms)
+                    hyde_span.set_attribute(
+                        SpanAttributes.HYDE_TIME_MS, result.hyde_time_ms
+                    )
                     if settings.log_retrieval_details:
                         logger.info(
                             f"HyDE expanded query in {result.hyde_time_ms:.1f}ms: "
                             f"'{query[:50]}...' -> {len(hyde_result.hypothetical_document)} chars"
                         )
                 else:
-                    result.hyde_skipped_reason = hyde_result.skip_reason or hyde_result.error
+                    result.hyde_skipped_reason = (
+                        hyde_result.skip_reason or hyde_result.error
+                    )
                     hyde_span.set_attribute(SpanAttributes.HYDE_USED, False)
-                    hyde_span.set_attribute(SpanAttributes.HYDE_SKIP_REASON, result.hyde_skipped_reason or "unknown")
+                    hyde_span.set_attribute(
+                        SpanAttributes.HYDE_SKIP_REASON,
+                        result.hyde_skipped_reason or "unknown",
+                    )
 
         # Phase 1: Vector search with scores (hybrid or dense-only)
         with tracer.start_as_current_span("rag.retrieval") as retrieval_span:
             retrieval_span.set_attribute(SpanAttributes.QUERY_HASH, query_hash)
             retrieval_span.set_attribute(SpanAttributes.QUERY_LENGTH, len(query))
             retrieval_span.set_attribute(SpanAttributes.RETRIEVAL_TOP_K, initial_top_k)
-            retrieval_span.set_attribute(SpanAttributes.RETRIEVAL_HYBRID, settings.hybrid_search_enabled)
+            retrieval_span.set_attribute(
+                SpanAttributes.RETRIEVAL_HYBRID, settings.hybrid_search_enabled
+            )
 
             retrieval_start = time.perf_counter()
             try:
                 # Use hybrid search if enabled, otherwise dense-only
                 # Both methods now return (results, cache_hit) tuple
                 if settings.hybrid_search_enabled:
-                    results_with_scores, cache_hit = vector_store.hybrid_search_with_cache_info(
-                        query=search_query,
-                        top_k=initial_top_k,
-                        min_score=settings.min_similarity_score
+                    results_with_scores, cache_hit = (
+                        vector_store.hybrid_search_with_cache_info(
+                            query=search_query,
+                            top_k=initial_top_k,
+                            min_score=settings.min_similarity_score,
+                        )
                     )
                     result.hybrid_search_used = True
                 else:
-                    results_with_scores, cache_hit = vector_store.search_with_cache_info(
-                        query=search_query,
-                        top_k=initial_top_k,
-                        min_score=settings.min_similarity_score
+                    results_with_scores, cache_hit = (
+                        vector_store.search_with_cache_info(
+                            query=search_query,
+                            top_k=initial_top_k,
+                            min_score=settings.min_similarity_score,
+                        )
                     )
                 result.embedding_cache_hit = cache_hit
-                result.retrieval_time_ms = (time.perf_counter() - retrieval_start) * 1000
+                result.retrieval_time_ms = (
+                    time.perf_counter() - retrieval_start
+                ) * 1000
                 result.initial_count = len(results_with_scores)
 
                 # Set retrieval span attributes
-                retrieval_span.set_attribute(SpanAttributes.RETRIEVAL_RESULT_COUNT, result.initial_count)
-                retrieval_span.set_attribute(SpanAttributes.RETRIEVAL_TIME_MS, result.retrieval_time_ms)
-                retrieval_span.set_attribute(SpanAttributes.RETRIEVAL_CACHE_HIT, cache_hit if cache_hit is not None else False)
+                retrieval_span.set_attribute(
+                    SpanAttributes.RETRIEVAL_RESULT_COUNT, result.initial_count
+                )
+                retrieval_span.set_attribute(
+                    SpanAttributes.RETRIEVAL_TIME_MS, result.retrieval_time_ms
+                )
+                retrieval_span.set_attribute(
+                    SpanAttributes.RETRIEVAL_CACHE_HIT,
+                    cache_hit if cache_hit is not None else False,
+                )
 
             except Exception as e:
                 result.retrieval_error = str(e)
@@ -947,8 +1067,12 @@ Question: {query}{cot_scaffold}"""
             avg_score = sum(similarity_scores) / len(similarity_scores)
             with tracer.start_as_current_span("rag.retrieval.scores") as scores_span:
                 scores_span.set_attribute(SpanAttributes.RETRIEVAL_AVG_SCORE, avg_score)
-                scores_span.set_attribute(SpanAttributes.RETRIEVAL_MAX_SCORE, max(similarity_scores))
-                scores_span.set_attribute(SpanAttributes.RETRIEVAL_MIN_SCORE, min(similarity_scores))
+                scores_span.set_attribute(
+                    SpanAttributes.RETRIEVAL_MAX_SCORE, max(similarity_scores)
+                )
+                scores_span.set_attribute(
+                    SpanAttributes.RETRIEVAL_MIN_SCORE, min(similarity_scores)
+                )
 
         if settings.log_retrieval_details:
             score_preview = ", ".join(f"{s:.3f}" for s in similarity_scores[:5])
@@ -961,8 +1085,12 @@ Question: {query}{cot_scaffold}"""
         if settings.reranker_enabled:
             with tracer.start_as_current_span("rag.rerank") as rerank_span:
                 rerank_span.set_attribute(SpanAttributes.RERANK_ENABLED, True)
-                rerank_span.set_attribute(SpanAttributes.RERANK_MODEL, settings.reranker_model)
-                rerank_span.set_attribute(SpanAttributes.RERANK_INPUT_COUNT, len(documents))
+                rerank_span.set_attribute(
+                    SpanAttributes.RERANK_MODEL, settings.reranker_model
+                )
+                rerank_span.set_attribute(
+                    SpanAttributes.RERANK_INPUT_COUNT, len(documents)
+                )
 
                 rerank_start = time.perf_counter()
                 try:
@@ -976,17 +1104,24 @@ Question: {query}{cot_scaffold}"""
                     result.reranker_model = settings.reranker_model
 
                     # Set rerank span attributes
-                    rerank_span.set_attribute(SpanAttributes.RERANK_OUTPUT_COUNT, len(reranked_docs))
-                    rerank_span.set_attribute(SpanAttributes.RERANK_TIME_MS, result.rerank_time_ms)
+                    rerank_span.set_attribute(
+                        SpanAttributes.RERANK_OUTPUT_COUNT, len(reranked_docs)
+                    )
+                    rerank_span.set_attribute(
+                        SpanAttributes.RERANK_TIME_MS, result.rerank_time_ms
+                    )
 
                     # Extract rerank scores from document metadata
                     rerank_scores = []
                     for doc in reranked_docs:
-                        score = doc.metadata.get('rerank_score', 0.0)
+                        score = doc.metadata.get("rerank_score", 0.0)
                         rerank_scores.append(score)
 
                     if rerank_scores:
-                        rerank_span.set_attribute(SpanAttributes.RERANK_AVG_SCORE, sum(rerank_scores) / len(rerank_scores))
+                        rerank_span.set_attribute(
+                            SpanAttributes.RERANK_AVG_SCORE,
+                            sum(rerank_scores) / len(rerank_scores),
+                        )
 
                     # Map similarity scores to reranked order using content hash
                     doc_to_sim_score = {}
@@ -1005,7 +1140,9 @@ Question: {query}{cot_scaffold}"""
                     result.rerank_scores = rerank_scores
 
                     if settings.log_retrieval_details:
-                        rerank_preview = ", ".join(f"{s:.3f}" for s in rerank_scores[:5])
+                        rerank_preview = ", ".join(
+                            f"{s:.3f}" for s in rerank_scores[:5]
+                        )
                         logger.info(
                             f"Reranking: {len(reranked_docs)} results in {result.rerank_time_ms:.1f}ms, "
                             f"scores=[{rerank_preview}]"
@@ -1015,7 +1152,9 @@ Question: {query}{cot_scaffold}"""
                     filtered_docs = []
                     filtered_sim_scores = []
                     filtered_rerank_scores = []
-                    for doc, sim_score, rerank_score in zip(documents, similarity_scores, rerank_scores):
+                    for doc, sim_score, rerank_score in zip(
+                        documents, similarity_scores, rerank_scores
+                    ):
                         if rerank_score >= settings.min_rerank_score:
                             filtered_docs.append(doc)
                             filtered_sim_scores.append(sim_score)
@@ -1046,12 +1185,12 @@ Question: {query}{cot_scaffold}"""
                     logger.error(f"Reranking failed: {e}, using original order")
                     rerank_span.record_exception(e)
                     # Fall back to original results without reranking
-                    documents = documents[:settings.top_k_results]
-                    similarity_scores = similarity_scores[:settings.top_k_results]
+                    documents = documents[: settings.top_k_results]
+                    similarity_scores = similarity_scores[: settings.top_k_results]
         else:
             # No reranking, just take top_k results
-            documents = documents[:settings.top_k_results]
-            similarity_scores = similarity_scores[:settings.top_k_results]
+            documents = documents[: settings.top_k_results]
+            similarity_scores = similarity_scores[: settings.top_k_results]
 
         result.documents = documents
         result.similarity_scores = similarity_scores
@@ -1074,9 +1213,12 @@ Question: {query}{cot_scaffold}"""
                 # Fallback to similarity scores if reranker not used
                 avg_score = (
                     sum(result.similarity_scores) / len(result.similarity_scores)
-                    if result.similarity_scores else 0.0
+                    if result.similarity_scores
+                    else 0.0
                 )
-                max_score = max(result.similarity_scores) if result.similarity_scores else 0.0
+                max_score = (
+                    max(result.similarity_scores) if result.similarity_scores else 0.0
+                )
 
                 should_search, reason = web_searcher.should_search(
                     avg_similarity_score=avg_score,
@@ -1091,22 +1233,33 @@ Question: {query}{cot_scaffold}"""
                 with tracer.start_as_current_span("rag.web_search") as web_span:
                     web_span.set_attribute(SpanAttributes.WEB_SEARCH_ENABLED, True)
                     web_span.set_attribute(SpanAttributes.WEB_SEARCH_TRIGGERED, True)
-                    web_span.set_attribute(SpanAttributes.WEB_SEARCH_REASON, reason or "unknown")
+                    web_span.set_attribute(
+                        SpanAttributes.WEB_SEARCH_REASON, reason or "unknown"
+                    )
 
                     try:
                         # Use synchronous search (httpx.Client, safe in any context)
                         web_response = web_searcher.search_sync(query)
 
                         result.web_search_time_ms = web_response.search_time_ms
-                        result.web_search_used = web_response.triggered and not web_response.error
+                        result.web_search_used = (
+                            web_response.triggered and not web_response.error
+                        )
 
                         # Set span attributes
-                        web_span.set_attribute(SpanAttributes.WEB_SEARCH_TIME_MS, result.web_search_time_ms)
+                        web_span.set_attribute(
+                            SpanAttributes.WEB_SEARCH_TIME_MS, result.web_search_time_ms
+                        )
 
                         if web_response.results:
                             result.web_search_results_count = len(web_response.results)
-                            result.web_search_context = web_searcher.format_for_context(web_response.results)
-                            web_span.set_attribute(SpanAttributes.WEB_SEARCH_RESULT_COUNT, result.web_search_results_count)
+                            result.web_search_context = web_searcher.format_for_context(
+                                web_response.results
+                            )
+                            web_span.set_attribute(
+                                SpanAttributes.WEB_SEARCH_RESULT_COUNT,
+                                result.web_search_results_count,
+                            )
                             logger.info(
                                 f"Web search returned {len(web_response.results)} results "
                                 f"in {web_response.search_time_ms:.0f}ms"
@@ -1124,7 +1277,11 @@ Question: {query}{cot_scaffold}"""
 
         # Log metrics if enabled
         if settings.enable_retrieval_metrics:
-            scores_to_log = result.rerank_scores if result.reranker_used else result.similarity_scores
+            scores_to_log = (
+                result.rerank_scores
+                if result.reranker_used
+                else result.similarity_scores
+            )
             try:
                 retrieval_metrics_logger.log_retrieval(
                     query=query,
@@ -1133,7 +1290,7 @@ Question: {query}{cot_scaffold}"""
                     top_k=settings.top_k_results,
                     latency_ms=result.total_time_ms,
                     score_threshold=settings.min_similarity_score,
-                    filtered_count=0
+                    filtered_count=0,
                 )
             except Exception as e:
                 logger.warning(f"Failed to log retrieval metrics: {e}")
@@ -1152,7 +1309,7 @@ Question: {query}{cot_scaffold}"""
         self,
         query: str,
         model: str = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> RetrievalResult:
         """Async wrapper for _retrieve_with_scores that runs in a thread pool executor.
 
@@ -1169,14 +1326,11 @@ Question: {query}{cot_scaffold}"""
         """
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None,
-            lambda: self._retrieve_with_scores(query, model, conversation_history)
+            None, lambda: self._retrieve_with_scores(query, model, conversation_history)
         )
 
     def _retrieve_with_metrics(
-        self,
-        query: str,
-        model: str = None
+        self, query: str, model: str = None
     ) -> Tuple[List, Optional[RetrievalMetrics]]:
         """Backwards-compatible wrapper around _retrieve_with_scores.
 
@@ -1187,9 +1341,14 @@ Question: {query}{cot_scaffold}"""
         # Build simplified metrics for backwards compatibility
         metrics = None
         if settings.enable_retrieval_metrics and result.documents:
-            scores = result.rerank_scores if result.reranker_used else result.similarity_scores
+            scores = (
+                result.rerank_scores
+                if result.reranker_used
+                else result.similarity_scores
+            )
             if scores:
                 import statistics
+
                 metrics = RetrievalMetrics(
                     timestamp="",
                     query_hash="",
@@ -1223,7 +1382,9 @@ Question: {query}{cot_scaffold}"""
         result = self._retrieve_with_scores(query)
         return result.documents
 
-    def _format_sources_with_scores(self, result: RetrievalResult) -> List[Dict[str, Any]]:
+    def _format_sources_with_scores(
+        self, result: RetrievalResult
+    ) -> List[Dict[str, Any]]:
         """Format retrieval results into source metadata with scores for API response.
 
         Each source includes:
@@ -1244,23 +1405,23 @@ Question: {query}{cot_scaffold}"""
 
         for i, doc in enumerate(result.documents):
             source_info = {
-                'source': doc.metadata.get('source', 'Unknown'),
-                'source_type': doc.metadata.get('source_type', 'Unknown'),
-                'content_preview': (
-                    doc.page_content[:200] + '...'
+                "source": doc.metadata.get("source", "Unknown"),
+                "source_type": doc.metadata.get("source_type", "Unknown"),
+                "content_preview": (
+                    doc.page_content[:200] + "..."
                     if len(doc.page_content) > 200
                     else doc.page_content
                 ),
-                'rank': i + 1,
+                "rank": i + 1,
             }
 
             # Add similarity score
             if i < len(result.similarity_scores):
-                source_info['similarity_score'] = round(result.similarity_scores[i], 4)
+                source_info["similarity_score"] = round(result.similarity_scores[i], 4)
 
             # Add rerank score if available
             if result.reranker_used and i < len(result.rerank_scores):
-                source_info['rerank_score'] = round(result.rerank_scores[i], 4)
+                source_info["rerank_score"] = round(result.rerank_scores[i], 4)
 
             sources.append(source_info)
 
@@ -1276,45 +1437,55 @@ Question: {query}{cot_scaffold}"""
             Dictionary with retrieval performance metrics
         """
         metrics = {
-            'initial_candidates': result.initial_count,
-            'final_results': result.final_count,
-            'reranker_used': result.reranker_used,
-            'reranker_model': result.reranker_model,
-            'retrieval_time_ms': round(result.retrieval_time_ms, 2),
-            'rerank_time_ms': round(result.rerank_time_ms, 2) if result.reranker_used else None,
-            'total_time_ms': round(result.total_time_ms, 2),
-            'hybrid_search_used': result.hybrid_search_used,
-            'hyde_used': result.hyde_used,
-            'hyde_time_ms': round(result.hyde_time_ms, 2) if result.hyde_used else None,
-            'web_search_used': result.web_search_used,
-            'web_search_reason': result.web_search_trigger_reason,
-            'web_search_results': result.web_search_results_count if result.web_search_used else None,
-            'web_search_time_ms': round(result.web_search_time_ms, 2) if result.web_search_used else None,
-            'embedding_cache_hit': result.embedding_cache_hit,
+            "initial_candidates": result.initial_count,
+            "final_results": result.final_count,
+            "reranker_used": result.reranker_used,
+            "reranker_model": result.reranker_model,
+            "retrieval_time_ms": round(result.retrieval_time_ms, 2),
+            "rerank_time_ms": round(result.rerank_time_ms, 2)
+            if result.reranker_used
+            else None,
+            "total_time_ms": round(result.total_time_ms, 2),
+            "hybrid_search_used": result.hybrid_search_used,
+            "hyde_used": result.hyde_used,
+            "hyde_time_ms": round(result.hyde_time_ms, 2) if result.hyde_used else None,
+            "web_search_used": result.web_search_used,
+            "web_search_reason": result.web_search_trigger_reason,
+            "web_search_results": result.web_search_results_count
+            if result.web_search_used
+            else None,
+            "web_search_time_ms": round(result.web_search_time_ms, 2)
+            if result.web_search_used
+            else None,
+            "embedding_cache_hit": result.embedding_cache_hit,
             # Conversation context metrics
-            'conversation_context_used': result.conversation_context_used,
-            'conversation_context_terms': result.conversation_context_terms if result.conversation_context_used else None,
-            'original_query': result.original_query if result.conversation_context_used else None,
+            "conversation_context_used": result.conversation_context_used,
+            "conversation_context_terms": result.conversation_context_terms
+            if result.conversation_context_used
+            else None,
+            "original_query": result.original_query
+            if result.conversation_context_used
+            else None,
         }
 
         # Calculate average scores
         if result.similarity_scores:
-            metrics['avg_similarity_score'] = round(
+            metrics["avg_similarity_score"] = round(
                 sum(result.similarity_scores) / len(result.similarity_scores), 4
             )
 
         if result.rerank_scores:
-            metrics['avg_rerank_score'] = round(
+            metrics["avg_rerank_score"] = round(
                 sum(result.rerank_scores) / len(result.rerank_scores), 4
             )
 
         # Include any errors
         if result.retrieval_error:
-            metrics['retrieval_error'] = result.retrieval_error
+            metrics["retrieval_error"] = result.retrieval_error
         if result.rerank_error:
-            metrics['rerank_error'] = result.rerank_error
+            metrics["rerank_error"] = result.rerank_error
         if result.web_search_error:
-            metrics['web_search_error'] = result.web_search_error
+            metrics["web_search_error"] = result.web_search_error
 
         return metrics
 
@@ -1333,25 +1504,23 @@ Question: {query}{cot_scaffold}"""
 
         if reranker is None:
             return {
-                'enabled': settings.reranker_enabled,
-                'loaded': False,
-                'model': None,
-                'device': None,
-                'error': None if not settings.reranker_enabled else 'Reranker not initialized'
+                "enabled": settings.reranker_enabled,
+                "loaded": False,
+                "model": None,
+                "device": None,
+                "error": None
+                if not settings.reranker_enabled
+                else "Reranker not initialized",
             }
 
-        return {
-            'enabled': True,
-            'loaded': True,
-            **reranker.get_model_info()
-        }
+        return {"enabled": True, "loaded": True, **reranker.get_model_info()}
 
     def _validate_response(
         self,
         response: str,
         context: str = "",
         sources: Optional[List[Dict[str, Any]]] = None,
-        query: str = ""
+        query: str = "",
     ) -> ValidationResult:
         """Validate LLM response for hallucinations and quality issues.
 
@@ -1373,16 +1542,14 @@ Question: {query}{cot_scaffold}"""
         """
         try:
             validation_result = validate_response(
-                response=response,
-                context=context,
-                sources=sources,
-                query=query
+                response=response, context=context, sources=sources, query=query
             )
 
             # Log validation summary
             if validation_result.issues:
                 issue_summary = ", ".join(
-                    f"{i.code}({i.severity.value})" for i in validation_result.issues[:5]
+                    f"{i.code}({i.severity.value})"
+                    for i in validation_result.issues[:5]
                 )
                 if len(validation_result.issues) > 5:
                     issue_summary += f"... (+{len(validation_result.issues) - 5} more)"
@@ -1399,11 +1566,7 @@ Question: {query}{cot_scaffold}"""
         except Exception as e:
             logger.error(f"Output validation failed: {e}")
             # Return a default result on error to not block the response
-            return ValidationResult(
-                is_valid=True,
-                confidence_score=0.5,
-                issues=[]
-            )
+            return ValidationResult(is_valid=True, confidence_score=0.5, issues=[])
 
     async def generate_response(
         self,
@@ -1437,6 +1600,7 @@ Question: {query}{cot_scaffold}"""
             - retrieval_metrics: Performance and quality metrics (if enabled)
         """
         import time as time_module
+
         pipeline_start = time_module.perf_counter()
         tracer = get_tracer()
 
@@ -1447,7 +1611,9 @@ Question: {query}{cot_scaffold}"""
         with tracer.start_as_current_span("rag.query") as query_span:
             query_span.set_attribute(SpanAttributes.QUERY_HASH, query_hash)
             query_span.set_attribute(SpanAttributes.QUERY_LENGTH, len(query))
-            query_span.set_attribute(SpanAttributes.LLM_MODEL, model or self.default_model)
+            query_span.set_attribute(
+                SpanAttributes.LLM_MODEL, model or self.default_model
+            )
             query_span.set_attribute(SpanAttributes.LLM_TEMPERATURE, temperature)
             query_span.set_attribute(SpanAttributes.LLM_MAX_TOKENS, max_tokens)
 
@@ -1465,7 +1631,7 @@ Question: {query}{cot_scaffold}"""
                     context_str = self._format_context(
                         retrieval_result.documents,
                         web_context=retrieval_result.web_search_context,
-                        max_context_tokens=get_model_context_limit(model)
+                        max_context_tokens=get_model_context_limit(model),
                     )
                 except Exception as e:
                     logger.error("Error retrieving context: %s", e)
@@ -1476,8 +1642,12 @@ Question: {query}{cot_scaffold}"""
             messages = self._build_messages(query, context_str, model)
 
             # Set context attributes
-            query_span.set_attribute(SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str))
-            query_span.set_attribute(SpanAttributes.PIPELINE_SOURCE_COUNT, len(retrieval_result.documents))
+            query_span.set_attribute(
+                SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str)
+            )
+            query_span.set_attribute(
+                SpanAttributes.PIPELINE_SOURCE_COUNT, len(retrieval_result.documents)
+            )
 
             # Generate response using Ollama with circuit breaker protection
             try:
@@ -1486,7 +1656,9 @@ Question: {query}{cot_scaffold}"""
                     llm_span.set_attribute(SpanAttributes.LLM_MODEL, model)
                     llm_span.set_attribute(SpanAttributes.LLM_TEMPERATURE, temperature)
                     llm_span.set_attribute(SpanAttributes.LLM_MAX_TOKENS, max_tokens)
-                    llm_span.set_attribute(SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str))
+                    llm_span.set_attribute(
+                        SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str)
+                    )
 
                     llm_start = time_module.perf_counter()
 
@@ -1504,22 +1676,26 @@ Question: {query}{cot_scaffold}"""
 
                     llm_time_ms = (time_module.perf_counter() - llm_start) * 1000
                     llm_span.set_attribute(SpanAttributes.LLM_TIME_MS, llm_time_ms)
-                    llm_span.set_attribute(SpanAttributes.LLM_RESPONSE_LENGTH, len(answer))
+                    llm_span.set_attribute(
+                        SpanAttributes.LLM_RESPONSE_LENGTH, len(answer)
+                    )
 
                 # Build sources list for validation
                 sources_list = (
                     self._format_sources_with_scores(retrieval_result)
-                    if retrieval_result.documents else None
+                    if retrieval_result.documents
+                    else None
                 )
 
                 # Build response with sources including scores
                 result = {
-                    'response': answer,
-                    'model': model,
-                    'context_used': bool(retrieval_result.documents) or bool(retrieval_result.web_search_context),
-                    'sources': sources_list,
-                    'reranker_enabled': settings.reranker_enabled,
-                    'retrieval_error': retrieval_error,
+                    "response": answer,
+                    "model": model,
+                    "context_used": bool(retrieval_result.documents)
+                    or bool(retrieval_result.web_search_context),
+                    "sources": sources_list,
+                    "reranker_enabled": settings.reranker_enabled,
+                    "retrieval_error": retrieval_error,
                 }
 
                 # Validate the response for hallucinations and quality issues (if enabled)
@@ -1528,18 +1704,26 @@ Question: {query}{cot_scaffold}"""
                         response=answer,
                         context=context_str,
                         sources=sources_list,
-                        query=query
+                        query=query,
                     )
-                    result['output_validation'] = validation_result.to_dict()
+                    result["output_validation"] = validation_result.to_dict()
 
                 # Include retrieval metrics if enabled
-                if settings.enable_retrieval_metrics and (retrieval_result.documents or retrieval_result.web_search_used):
-                    result['retrieval_metrics'] = self._build_retrieval_metrics_dict(retrieval_result)
+                if settings.enable_retrieval_metrics and (
+                    retrieval_result.documents or retrieval_result.web_search_used
+                ):
+                    result["retrieval_metrics"] = self._build_retrieval_metrics_dict(
+                        retrieval_result
+                    )
 
                 # Set final pipeline attributes
                 pipeline_total_ms = (time_module.perf_counter() - pipeline_start) * 1000
-                query_span.set_attribute(SpanAttributes.PIPELINE_TOTAL_TIME_MS, pipeline_total_ms)
-                query_span.set_attribute(SpanAttributes.PIPELINE_CONTEXT_USED, result['context_used'])
+                query_span.set_attribute(
+                    SpanAttributes.PIPELINE_TOTAL_TIME_MS, pipeline_total_ms
+                )
+                query_span.set_attribute(
+                    SpanAttributes.PIPELINE_CONTEXT_USED, result["context_used"]
+                )
 
                 return result
 
@@ -1548,8 +1732,10 @@ Question: {query}{cot_scaffold}"""
                 raise
             except Exception as e:
                 query_span.record_exception(e)
-                raise RuntimeError("Error generating response: {}".format(str(e))) from e
-    
+                raise RuntimeError(
+                    "Error generating response: {}".format(str(e))
+                ) from e
+
     def list_models(self) -> List[Dict[str, Any]]:
         """List available Ollama models with circuit breaker protection."""
         try:
@@ -1558,7 +1744,7 @@ Question: {query}{cot_scaffold}"""
                 return ollama.list()
 
             models = ollama_circuit_breaker.call(_list_models)
-            return models.get('models', [])
+            return models.get("models", [])
         except CircuitBreakerOpen:
             logger.warning("Ollama circuit breaker is open, cannot list models")
             return []
@@ -1599,8 +1785,7 @@ Question: {query}{cot_scaffold}"""
             cb_state = ollama_circuit_breaker.state
             if cb_state.value == "open":
                 raise CircuitBreakerOpen(
-                    "ollama",
-                    ollama_circuit_breaker.config.reset_timeout_seconds
+                    "ollama", ollama_circuit_breaker.config.reset_timeout_seconds
                 )
 
             # Wrap streaming in circuit breaker call for failure tracking
@@ -1609,35 +1794,33 @@ Question: {query}{cot_scaffold}"""
                     model=model,
                     messages=messages,
                     options={
-                        'temperature': temperature,
-                        'num_predict': max_tokens,
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
                     },
-                    stream=True
+                    stream=True,
                 )
 
             stream = ollama_circuit_breaker.call(_create_stream)
 
             for chunk in stream:
-                if chunk.get('message', {}).get('content'):
+                if chunk.get("message", {}).get("content"):
                     # Thread-safe way to put item in async queue
                     loop.call_soon_threadsafe(
                         queue.put_nowait,
-                        {'type': 'content', 'content': chunk['message']['content']}
+                        {"type": "content", "content": chunk["message"]["content"]},
                     )
 
             # Signal completion
-            loop.call_soon_threadsafe(queue.put_nowait, {'type': 'done'})
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "done"})
 
         except CircuitBreakerOpen as e:
             error_msg = get_service_unavailable_message(e)
             loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {'type': 'error', 'error': error_msg}
+                queue.put_nowait, {"type": "error", "error": error_msg}
             )
         except Exception as e:
             loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {'type': 'error', 'error': str(e)}
+                queue.put_nowait, {"type": "error", "error": str(e)}
             )
 
     async def generate_response_stream(
@@ -1672,7 +1855,6 @@ Question: {query}{cot_scaffold}"""
             - done: Completion signal
             - error: Error information if something fails
         """
-        import time as time_module
         tracer = get_tracer()
 
         # Compute query hash for tracing correlation
@@ -1699,9 +1881,12 @@ Question: {query}{cot_scaffold}"""
                     context_str = self._format_context(
                         retrieval_result.documents,
                         web_context=retrieval_result.web_search_context,
-                        max_context_tokens=get_model_context_limit(model)
+                        max_context_tokens=get_model_context_limit(model),
                     )
-                    query_span.set_attribute(SpanAttributes.PIPELINE_SOURCE_COUNT, len(retrieval_result.documents))
+                    query_span.set_attribute(
+                        SpanAttributes.PIPELINE_SOURCE_COUNT,
+                        len(retrieval_result.documents),
+                    )
                 except Exception as e:
                     logger.error("Error retrieving context: %s", e)
                     query_span.record_exception(e)
@@ -1710,24 +1895,30 @@ Question: {query}{cot_scaffold}"""
             # Build messages with proper system/user separation (model-specific prompt)
             messages = self._build_messages(query, context_str, model)
 
-            query_span.set_attribute(SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str))
+            query_span.set_attribute(
+                SpanAttributes.LLM_CONTEXT_LENGTH, len(context_str)
+            )
 
         # Build metadata response with sources including scores
         metadata = {
-            'type': 'metadata',
-            'model': model,
-            'context_used': bool(retrieval_result.documents) or bool(retrieval_result.web_search_context),
-            'sources': (
+            "type": "metadata",
+            "model": model,
+            "context_used": bool(retrieval_result.documents)
+            or bool(retrieval_result.web_search_context),
+            "sources": (
                 self._format_sources_with_scores(retrieval_result)
-                if retrieval_result.documents else None
+                if retrieval_result.documents
+                else None
             ),
-            'reranker_enabled': settings.reranker_enabled,
-            'retrieval_error': retrieval_error,
+            "reranker_enabled": settings.reranker_enabled,
+            "retrieval_error": retrieval_error,
         }
 
         # Include retrieval metrics if enabled
         if settings.enable_retrieval_metrics and retrieval_result.documents:
-            metadata['retrieval_metrics'] = self._build_retrieval_metrics_dict(retrieval_result)
+            metadata["retrieval_metrics"] = self._build_retrieval_metrics_dict(
+                retrieval_result
+            )
 
         # Yield metadata first
         yield metadata
@@ -1747,12 +1938,12 @@ Question: {query}{cot_scaffold}"""
                 max_tokens=max_tokens,
             ):
                 accumulated_response.append(token)
-                yield {'type': 'content', 'content': token}
+                yield {"type": "content", "content": token}
 
             # Validate the complete response before signaling done (if enabled)
             if settings.output_validation_enabled:
                 full_response = "".join(accumulated_response)
-                sources_list = metadata.get('sources')
+                sources_list = metadata.get("sources")
 
                 validation_result = self._validate_response(
                     response=full_response,
@@ -1762,14 +1953,14 @@ Question: {query}{cot_scaffold}"""
                 )
 
                 yield {
-                    'type': 'validation',
-                    'output_validation': validation_result.to_dict(),
+                    "type": "validation",
+                    "output_validation": validation_result.to_dict(),
                 }
 
-            yield {'type': 'done'}
+            yield {"type": "done"}
         except Exception as e:  # noqa: BLE001
             logger.error("Streaming provider error: %s", e)
-            yield {'type': 'error', 'error': str(e)}
+            yield {"type": "error", "error": str(e)}
 
 
 # Singleton instance

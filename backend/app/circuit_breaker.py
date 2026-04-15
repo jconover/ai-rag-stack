@@ -38,7 +38,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 from tenacity import (
     AsyncRetrying,
@@ -57,9 +57,10 @@ T = TypeVar("T")
 
 class CircuitState(Enum):
     """Circuit breaker states."""
-    CLOSED = "closed"       # Normal operation
-    OPEN = "open"           # Failing fast
-    HALF_OPEN = "half_open" # Testing recovery
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failing fast
+    HALF_OPEN = "half_open"  # Testing recovery
 
 
 @dataclass
@@ -77,6 +78,7 @@ class CircuitBreakerConfig:
         retry_multiplier: Exponential backoff multiplier
         exceptions: Exception types to catch and retry
     """
+
     name: str
     failure_threshold: int = 5
     success_threshold: int = 2
@@ -91,6 +93,7 @@ class CircuitBreakerConfig:
 @dataclass
 class CircuitBreakerStats:
     """Statistics for a circuit breaker."""
+
     total_calls: int = 0
     successful_calls: int = 0
     failed_calls: int = 0
@@ -256,9 +259,7 @@ class CircuitBreaker:
             self._check_state()
         except CircuitBreakerOpen:
             if self._fallback:
-                logger.info(
-                    f"Circuit breaker '{self.config.name}' using fallback"
-                )
+                logger.info(f"Circuit breaker '{self.config.name}' using fallback")
                 return self._fallback(*args, **kwargs)
             raise
 
@@ -304,9 +305,7 @@ class CircuitBreaker:
             self._check_state()
         except CircuitBreakerOpen:
             if self._fallback:
-                logger.info(
-                    f"Circuit breaker '{self.config.name}' using fallback"
-                )
+                logger.info(f"Circuit breaker '{self.config.name}' using fallback")
                 if asyncio.iscoroutinefunction(self._fallback):
                     return await self._fallback(*args, **kwargs)
                 return self._fallback(*args, **kwargs)
@@ -376,7 +375,8 @@ class CircuitBreaker:
                 "current_successes": stats.current_successes,
                 "success_rate": (
                     stats.successful_calls / stats.total_calls
-                    if stats.total_calls > 0 else None
+                    if stats.total_calls > 0
+                    else None
                 ),
             },
             "time_until_retry": time_until_retry,
@@ -468,6 +468,7 @@ tavily_circuit_breaker = CircuitBreaker(
 # Decorator Factories
 # =============================================================================
 
+
 def with_circuit_breaker(
     breaker: CircuitBreaker,
     fallback: Optional[Callable] = None,
@@ -490,25 +491,33 @@ def with_circuit_breaker(
         def search_qdrant(...):
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         if asyncio.iscoroutinefunction(func):
+
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 if fallback:
                     breaker.set_fallback(fallback)
                 return await breaker.call_async(func, *args, **kwargs)
+
             return async_wrapper
         else:
+
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 if fallback:
                     breaker.set_fallback(fallback)
                 return breaker.call(func, *args, **kwargs)
+
             return sync_wrapper
+
     return decorator
 
 
-def with_ollama_circuit_breaker(func: Callable = None, *, fallback: Optional[Callable] = None):
+def with_ollama_circuit_breaker(
+    func: Callable = None, *, fallback: Optional[Callable] = None
+):
     """Decorator for Ollama circuit breaker protection.
 
     Usage:
@@ -525,7 +534,9 @@ def with_ollama_circuit_breaker(func: Callable = None, *, fallback: Optional[Cal
     return with_circuit_breaker(ollama_circuit_breaker)(func)
 
 
-def with_qdrant_circuit_breaker(func: Callable = None, *, fallback: Optional[Callable] = None):
+def with_qdrant_circuit_breaker(
+    func: Callable = None, *, fallback: Optional[Callable] = None
+):
     """Decorator for Qdrant circuit breaker protection.
 
     Usage:
@@ -542,7 +553,9 @@ def with_qdrant_circuit_breaker(func: Callable = None, *, fallback: Optional[Cal
     return with_circuit_breaker(qdrant_circuit_breaker)(func)
 
 
-def with_tavily_circuit_breaker(func: Callable = None, *, fallback: Optional[Callable] = None):
+def with_tavily_circuit_breaker(
+    func: Callable = None, *, fallback: Optional[Callable] = None
+):
     """Decorator for Tavily circuit breaker protection.
 
     Usage:
@@ -562,6 +575,7 @@ def with_tavily_circuit_breaker(func: Callable = None, *, fallback: Optional[Cal
 # =============================================================================
 # Health Check Utilities
 # =============================================================================
+
 
 def get_circuit_breaker_states() -> Dict[str, Dict[str, Any]]:
     """Get status of all circuit breakers for health checks.
@@ -603,6 +617,7 @@ def reset_all_circuit_breakers() -> None:
 # =============================================================================
 # Exception Helpers
 # =============================================================================
+
 
 def is_circuit_breaker_exception(exc: Exception) -> bool:
     """Check if an exception is a circuit breaker exception.

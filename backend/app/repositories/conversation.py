@@ -26,6 +26,7 @@ class ConversationRepository(BaseRepository[List[Dict[str, str]]]):
         """Lazy load storage to avoid circular imports."""
         if self._storage is None:
             from app.conversation_storage import conversation_storage
+
             self._storage = conversation_storage
         return self._storage
 
@@ -56,9 +57,7 @@ class ConversationRepository(BaseRepository[List[Dict[str, str]]]):
             return False
 
     async def get_history(
-        self,
-        session_id: str,
-        limit: int = 10
+        self, session_id: str, limit: int = 10
     ) -> List[Dict[str, str]]:
         """Get conversation history for a session.
 
@@ -78,12 +77,7 @@ class ConversationRepository(BaseRepository[List[Dict[str, str]]]):
             self._log_error("get_history", e)
             raise QueryError(str(e), "get_history")
 
-    async def add_message(
-        self,
-        session_id: str,
-        role: str,
-        content: str
-    ) -> None:
+    async def add_message(self, session_id: str, role: str, content: str) -> None:
         """Add a message to conversation history.
 
         Args:
@@ -115,11 +109,7 @@ class ConversationRepository(BaseRepository[List[Dict[str, str]]]):
             self._log_error("clear_history", e)
             raise QueryError(str(e), "clear_history")
 
-    async def get_context(
-        self,
-        session_id: str,
-        max_recent: int = 5
-    ) -> str:
+    async def get_context(self, session_id: str, max_recent: int = 5) -> str:
         """Get formatted conversation context for RAG.
 
         Args:
@@ -151,8 +141,8 @@ class ConversationRepository(BaseRepository[List[Dict[str, str]]]):
 
         try:
             history = await self.get_history(session_id, limit=1000)
-            user_messages = sum(1 for m in history if m.get('role') == 'user')
-            assistant_messages = sum(1 for m in history if m.get('role') == 'assistant')
+            user_messages = sum(1 for m in history if m.get("role") == "user")
+            assistant_messages = sum(1 for m in history if m.get("role") == "assistant")
 
             return {
                 "session_id": session_id,

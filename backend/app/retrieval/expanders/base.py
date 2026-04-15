@@ -27,6 +27,7 @@ class ExpansionResult:
         expander_name: Name of the expander that produced this result
         error: Error message if expansion failed
     """
+
     original_query: str
     expanded_query: str
     expanded: bool = False
@@ -99,15 +100,12 @@ class BaseExpander(QueryExpander):
     async def expand_async(self, query: str, **kwargs) -> ExpansionResult:
         """Default async implementation runs sync expand in executor."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self.expand(query, **kwargs))
 
     def _create_result(
-        self,
-        original_query: str,
-        expanded_query: str,
-        expanded: bool = True,
-        **kwargs
+        self, original_query: str, expanded_query: str, expanded: bool = True, **kwargs
     ) -> ExpansionResult:
         """Helper to create ExpansionResult with expander name set."""
         return ExpansionResult(
@@ -115,7 +113,7 @@ class BaseExpander(QueryExpander):
             expanded_query=expanded_query,
             expanded=expanded,
             expander_name=self.name,
-            **kwargs
+            **kwargs,
         )
 
 

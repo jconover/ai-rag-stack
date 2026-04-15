@@ -19,6 +19,7 @@ Usage:
     # Check for drift periodically
     status = await drift_detector.check_drift()
 """
+
 import logging
 import json
 import statistics
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 class DriftStatus(str, Enum):
     """Drift detection status states."""
+
     STABLE = "stable"
     DRIFT_DETECTED = "drift_detected"
     WARNING = "warning"
@@ -47,6 +49,7 @@ class DriftMetrics:
     Captures the key statistical properties of similarity scores
     for comparison between time windows.
     """
+
     mean_score: float
     std_score: float
     p25: float  # 25th percentile
@@ -86,6 +89,7 @@ class DriftCheckResult:
     Provides detailed information about detected drift including
     the magnitude of changes across different statistical measures.
     """
+
     status: DriftStatus
     mean_shift_pct: Optional[float] = None
     std_shift_pct: Optional[float] = None
@@ -185,6 +189,7 @@ class DriftDetector:
         if self._redis is None:
             try:
                 from app.redis_client import get_redis_string_client
+
                 self._redis = get_redis_string_client()
             except ImportError:
                 logger.warning("Redis client not available for drift detection")
@@ -524,17 +529,21 @@ class DriftDetector:
 
                     if daily_metrics:
                         # Average the metrics for the day
-                        avg_mean = statistics.mean(m["mean_score"] for m in daily_metrics)
+                        avg_mean = statistics.mean(
+                            m["mean_score"] for m in daily_metrics
+                        )
                         avg_std = statistics.mean(m["std_score"] for m in daily_metrics)
                         total_samples = sum(m["sample_count"] for m in daily_metrics)
 
-                        history.append({
-                            "date": date_str,
-                            "mean_score": round(avg_mean, 4),
-                            "std_score": round(avg_std, 4),
-                            "total_samples": total_samples,
-                            "measurement_count": len(daily_metrics),
-                        })
+                        history.append(
+                            {
+                                "date": date_str,
+                                "mean_score": round(avg_mean, 4),
+                                "std_score": round(avg_std, 4),
+                                "total_samples": total_samples,
+                                "measurement_count": len(daily_metrics),
+                            }
+                        )
 
         except Exception as e:
             logger.warning(f"Failed to retrieve history: {e}")

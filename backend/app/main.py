@@ -1,7 +1,7 @@
 """FastAPI application for DevOps AI Assistant"""
+
 import asyncio
 import uuid
-import os
 import subprocess
 import time
 import logging
@@ -9,7 +9,16 @@ from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Set
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query, Request, Header
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    UploadFile,
+    File,
+    Depends,
+    Query,
+    Request,
+    Header,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,69 +39,120 @@ from app.redis_client import (
     is_redis_connected,
 )
 from app.models import (
-    ChatRequest, ChatResponse, HealthResponse, HealthResponseSafe, ServiceStatus,
-    ModelsResponse, ModelInfo, StatsResponse,
-    FeedbackRequest, FeedbackResponse, RedisPoolStats, RedisPoolStatsSafe,
-    PostgresPoolStats, PostgresPoolStatsSafe, QueryLogEntry, QueryLogsResponse,
+    ChatRequest,
+    ChatResponse,
+    HealthResponse,
+    HealthResponseSafe,
+    ServiceStatus,
+    ModelsResponse,
+    ModelInfo,
+    StatsResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    RedisPoolStats,
+    PostgresPoolStats,
+    QueryLogEntry,
+    QueryLogsResponse,
     QueryAnalyticsSummary,
-    CircuitBreakerStatus, CircuitBreakersStatus, DeviceInfo,
+    CircuitBreakerStatus,
+    CircuitBreakersStatus,
+    DeviceInfo,
     # Query validation constant
     MAX_QUERY_LENGTH,
     # A/B Testing models
-    ExperimentCreate, ExperimentUpdate, ExperimentResponse,
-    ExperimentListResponse, ExperimentStatsResponse,
-    VariantAssignmentResponse, ExperimentResultRecord,
-    ExperimentResultResponse, ExperimentVariant,
-    VariantStats, StatisticalSignificance,
+    ExperimentCreate,
+    ExperimentUpdate,
+    ExperimentResponse,
+    ExperimentListResponse,
+    ExperimentStatsResponse,
+    VariantAssignmentResponse,
+    ExperimentResultRecord,
+    ExperimentResultResponse,
+    ExperimentVariant,
+    VariantStats,
+    StatisticalSignificance,
     # Authentication models
-    UserCreate, UserLogin, UserResponse, UserUpdate,
-    TokenResponse, APIKeyCreate, APIKeyResponse,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    UserUpdate,
+    TokenResponse,
+    APIKeyCreate,
+    APIKeyResponse,
     # Kubernetes readiness probe models
-    ReadinessCheck, ReadinessResponse, LivenessResponse,
+    ReadinessCheck,
+    ReadinessResponse,
+    LivenessResponse,
     # Prompt template models
-    RenderTemplateRequest, RenderTemplateResponse,
+    RenderTemplateRequest,
+    RenderTemplateResponse,
     # Real-time analytics models
-    RealtimeAnalyticsResponse, LatencyMetrics, RequestMetrics,
-    CacheMetrics, RetrievalQualityMetrics, ModelUsageStats, TopQueryEntry,
+    RealtimeAnalyticsResponse,
+    LatencyMetrics,
+    RequestMetrics,
+    CacheMetrics,
+    RetrievalQualityMetrics,
+    ModelUsageStats,
+    TopQueryEntry,
     # Drift detection models
-    DriftCheckResponse, DriftStatusResponse, DriftHistoryResponse,
-    DriftHistoryEntry, DriftMetricsResponse, SetBaselineResponse,
+    DriftCheckResponse,
+    DriftStatusResponse,
+    DriftHistoryResponse,
+    DriftHistoryEntry,
+    DriftMetricsResponse,
+    SetBaselineResponse,
     # Documentation freshness models
-    SourceFreshnessModel, FreshnessReportResponse,
+    SourceFreshnessModel,
+    FreshnessReportResponse,
 )
 from app.rag import rag_pipeline
 from app.vectorstore import vector_store
 from app.templates import (
-    get_templates, get_template_by_id, get_categories,
-    render_template, validate_template_variables
+    get_templates,
+    get_template_by_id,
+    get_categories,
+    render_template,
+    validate_template_variables,
 )
 from app.metrics import get_metrics_summary, ENABLE_PROMETHEUS
 from app.feedback import feedback_log, get_feedback_summary
 from app.database import (
-    init_db, close_db, get_db, get_db_context,
-    check_postgres_connection, get_postgres_pool_stats
+    init_db,
+    close_db,
+    get_db,
+    get_db_context,
+    check_postgres_connection,
+    get_postgres_pool_stats,
 )
 from app.db_models import (
-    QueryLog, Feedback,
-    Experiment, ExperimentAssignment, ExperimentResult,
-    ExperimentStatus, ExperimentType,
-    User, UserSession, APIKey,
+    QueryLog,
+    Feedback,
+    Experiment,
+    ExperimentAssignment,
+    ExperimentResult,
+    ExperimentStatus,
+    ExperimentType,
+    User,
+    APIKey,
 )
 from app.auth import (
-    auth_service, hash_password, verify_password,
-    generate_api_key, hash_token,
-    get_current_user, get_optional_user,
+    auth_service,
+    hash_password,
+    get_current_user,
+    get_optional_user,
 )
 from app.circuit_breaker import (
     get_circuit_breaker_states,
     get_circuit_breakers_healthy,
     reset_all_circuit_breakers,
 )
-from app.analytics import get_metrics_collector, MetricsCollector
-from app.drift_detection import drift_detector, DriftStatus
+from app.analytics import get_metrics_collector
+from app.drift_detection import drift_detector
 from app.device_utils import (
-    get_device_info, log_device_configuration,
-    get_actual_embedding_device, get_actual_reranker_device,
+    get_device_info,
+    log_device_configuration,
+    get_actual_embedding_device,
+    get_actual_reranker_device,
 )
 from app.conversation_storage import conversation_storage
 
@@ -124,7 +184,9 @@ def _create_background_task(coro, task_name: str = "background_task"):
         if not t.cancelled():
             exc = t.exception()
             if exc is not None:
-                logger.error(f"Unhandled exception in background task '{task_name}': {exc}")
+                logger.error(
+                    f"Unhandled exception in background task '{task_name}': {exc}"
+                )
 
     task.add_done_callback(_task_done_callback)
     return task
@@ -270,15 +332,12 @@ def validate_query_length(query: str, max_length: int = None) -> str:
         max_length = MAX_QUERY_LENGTH
 
     if not query or not query.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Query cannot be empty"
-        )
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     if len(query) > max_length:
         raise HTTPException(
             status_code=400,
-            detail=f"Query too long. Maximum length is {max_length} characters, got {len(query)}."
+            detail=f"Query too long. Maximum length is {max_length} characters, got {len(query)}.",
         )
 
     return query.strip()
@@ -292,7 +351,7 @@ async def warmup_ollama_model():
         ollama.chat(
             model=model,
             messages=[{"role": "user", "content": "warmup"}],
-            options={"num_predict": 1}
+            options={"num_predict": 1},
         )
         logger.info(f"Model {model} warmed up successfully")
     except Exception as e:
@@ -314,6 +373,7 @@ async def lifespan(app: FastAPI):
     # Initialize OpenTelemetry tracing (if enabled)
     try:
         from app.tracing import init_tracing, shutdown_tracing
+
         if init_tracing(app):
             logger.info("OpenTelemetry tracing initialized successfully")
     except ImportError:
@@ -340,6 +400,7 @@ async def lifespan(app: FastAPI):
     # Shutdown OpenTelemetry tracing
     try:
         from app.tracing import shutdown_tracing
+
         shutdown_tracing()
     except Exception as e:
         logger.warning(f"Error shutting down tracing: {e}")
@@ -362,7 +423,7 @@ app = FastAPI(
     title="DevOps AI Assistant API",
     description="RAG-powered AI assistant for DevOps documentation",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # CORS middleware - origins configurable via CORS_ORIGINS env var
@@ -462,7 +523,7 @@ def get_conversation_context(session_id: str, max_recent: int = 5) -> dict:
             "summary": None,
             "recent_messages": history,
             "has_history": len(history) > 0,
-            "message_count": len(history)
+            "message_count": len(history),
         }
 
 
@@ -506,7 +567,9 @@ async def check_and_trigger_summarization(session_id: str):
         try:
             await conversation_storage.check_and_summarize(session_id)
         except Exception as e:
-            logger.warning(f"Failed to trigger summarization for session {session_id}: {e}")
+            logger.warning(
+                f"Failed to trigger summarization for session {session_id}: {e}"
+            )
 
 
 @app.get("/")
@@ -516,7 +579,7 @@ async def root():
         "docs": "/docs",
         "health": "/api/health",
         "liveness": "/api/health/live",
-        "readiness": "/api/health/ready"
+        "readiness": "/api/health/ready",
     }
 
 
@@ -544,23 +607,27 @@ async def log_query_to_postgres(
     try:
         async with get_db_context() as db:
             # Extract metrics from result
-            retrieval_metrics = result.get('retrieval_metrics', {})
-            sources = result.get('sources', [])
+            retrieval_metrics = result.get("retrieval_metrics", {})
+            sources = result.get("sources", [])
 
             # Build retrieval scores dict
             retrieval_scores = None
             if retrieval_metrics:
                 retrieval_scores = {
-                    "avg_similarity_score": retrieval_metrics.get('avg_similarity_score'),
-                    "avg_rerank_score": retrieval_metrics.get('avg_rerank_score'),
-                    "initial_candidates": retrieval_metrics.get('initial_candidates'),
-                    "after_reranking": retrieval_metrics.get('after_reranking'),
+                    "avg_similarity_score": retrieval_metrics.get(
+                        "avg_similarity_score"
+                    ),
+                    "avg_rerank_score": retrieval_metrics.get("avg_rerank_score"),
+                    "initial_candidates": retrieval_metrics.get("initial_candidates"),
+                    "after_reranking": retrieval_metrics.get("after_reranking"),
                 }
 
             # Extract source paths
             sources_returned = None
             if sources:
-                sources_returned = [s.get('source', '') for s in sources if s.get('source')]
+                sources_returned = [
+                    s.get("source", "") for s in sources if s.get("source")
+                ]
 
             # Create query log entry
             query_log = QueryLog(
@@ -568,25 +635,43 @@ async def log_query_to_postgres(
                 user_id=uuid.UUID(user_id) if user_id else None,
                 query=query,
                 model=model,
-                response_length=len(result.get('response', '')),
-                context_used=result.get('context_used', True),
+                response_length=len(result.get("response", "")),
+                context_used=result.get("context_used", True),
                 sources_count=len(sources) if sources else 0,
                 sources_returned=sources_returned,
                 retrieval_scores=retrieval_scores,
                 latency_ms=total_time_ms,
                 total_time_ms=total_time_ms,
-                retrieval_time_ms=retrieval_metrics.get('retrieval_time_ms') if retrieval_metrics else None,
-                rerank_time_ms=retrieval_metrics.get('rerank_time_ms') if retrieval_metrics else None,
-                avg_similarity_score=retrieval_metrics.get('avg_similarity_score') if retrieval_metrics else None,
-                avg_rerank_score=retrieval_metrics.get('avg_rerank_score') if retrieval_metrics else None,
-                hybrid_search_used=retrieval_metrics.get('hybrid_search_used', False) if retrieval_metrics else False,
-                hyde_used=retrieval_metrics.get('hyde_used', False) if retrieval_metrics else False,
-                reranker_used=retrieval_metrics.get('reranker_used', False) if retrieval_metrics else False,
-                web_search_used=retrieval_metrics.get('web_search_used', False) if retrieval_metrics else False,
+                retrieval_time_ms=retrieval_metrics.get("retrieval_time_ms")
+                if retrieval_metrics
+                else None,
+                rerank_time_ms=retrieval_metrics.get("rerank_time_ms")
+                if retrieval_metrics
+                else None,
+                avg_similarity_score=retrieval_metrics.get("avg_similarity_score")
+                if retrieval_metrics
+                else None,
+                avg_rerank_score=retrieval_metrics.get("avg_rerank_score")
+                if retrieval_metrics
+                else None,
+                hybrid_search_used=retrieval_metrics.get("hybrid_search_used", False)
+                if retrieval_metrics
+                else False,
+                hyde_used=retrieval_metrics.get("hyde_used", False)
+                if retrieval_metrics
+                else False,
+                reranker_used=retrieval_metrics.get("reranker_used", False)
+                if retrieval_metrics
+                else False,
+                web_search_used=retrieval_metrics.get("web_search_used", False)
+                if retrieval_metrics
+                else False,
                 metadata={
-                    "temperature": result.get('temperature'),
-                    "web_search_reason": retrieval_metrics.get('web_search_reason') if retrieval_metrics else None,
-                }
+                    "temperature": result.get("temperature"),
+                    "web_search_reason": retrieval_metrics.get("web_search_reason")
+                    if retrieval_metrics
+                    else None,
+                },
             )
 
             db.add(query_log)
@@ -678,7 +763,9 @@ async def health_check():
     device_info_dict = get_device_info()
     device_info_response = DeviceInfo(
         embedding_device=get_actual_embedding_device(),
-        reranker_device=get_actual_reranker_device() if reranker_status.get('enabled') else None,
+        reranker_device=get_actual_reranker_device()
+        if reranker_status.get("enabled")
+        else None,
         cuda_available=device_info_dict.get("cuda_available", False),
         cuda_device_name=device_info_dict.get("cuda_device_name"),
         mps_available=device_info_dict.get("mps_available", False),
@@ -690,9 +777,8 @@ async def health_check():
     core_healthy = all([ollama_connected, qdrant_connected, redis_connected])
 
     # If reranker is enabled but not loaded, status is degraded
-    reranker_healthy = (
-        not reranker_status.get('enabled') or
-        reranker_status.get('loaded', False)
+    reranker_healthy = not reranker_status.get("enabled") or reranker_status.get(
+        "loaded", False
     )
 
     # Determine overall status
@@ -711,7 +797,9 @@ async def health_check():
         # Get Redis pool statistics (includes sensitive host/port info)
         pool_stats = get_redis_pool_stats()
         redis_pool_stats = RedisPoolStats(
-            max_connections=pool_stats.get("max_connections", settings.redis_max_connections),
+            max_connections=pool_stats.get(
+                "max_connections", settings.redis_max_connections
+            ),
             current_connections=pool_stats.get("current_connections"),
             available_connections=pool_stats.get("available_connections"),
             host=pool_stats.get("host"),
@@ -726,7 +814,9 @@ async def health_check():
             port=pg_pool_stats.get("port"),
             database=pg_pool_stats.get("database"),
             pool_size=pg_pool_stats.get("pool_size", settings.postgres_pool_size),
-            max_overflow=pg_pool_stats.get("max_overflow", settings.postgres_max_overflow),
+            max_overflow=pg_pool_stats.get(
+                "max_overflow", settings.postgres_max_overflow
+            ),
             checked_in=pg_pool_stats.get("checked_in"),
             checked_out=pg_pool_stats.get("checked_out"),
             overflow=pg_pool_stats.get("overflow"),
@@ -747,9 +837,9 @@ async def health_check():
             qdrant_connected=qdrant_connected,
             redis_connected=redis_connected,
             postgres_connected=postgres_connected,
-            reranker_enabled=reranker_status.get('enabled', False),
-            reranker_loaded=reranker_status.get('loaded', False),
-            reranker_model=reranker_status.get('model_name'),
+            reranker_enabled=reranker_status.get("enabled", False),
+            reranker_loaded=reranker_status.get("loaded", False),
+            reranker_model=reranker_status.get("model_name"),
             device_info=device_info_response,
             redis_pool=redis_pool_stats,
             postgres_pool=postgres_pool_stats,
@@ -770,7 +860,7 @@ async def health_check():
     if qdrant_connected:
         try:
             stats = vector_store.get_stats()
-            qdrant_points_count = stats.get('points_count', 0)
+            qdrant_points_count = stats.get("points_count", 0)
         except Exception:
             pass  # Keep as None if we can't get stats
 
@@ -820,8 +910,8 @@ async def health_check():
         status=status,
         services=services,
         reranker={
-            "enabled": reranker_status.get('enabled', False),
-            "loaded": reranker_status.get('loaded', False),
+            "enabled": reranker_status.get("enabled", False),
+            "loaded": reranker_status.get("loaded", False),
         },
         device_info=device_info_response,
         circuit_breakers=cb_states_safe,
@@ -839,8 +929,7 @@ async def liveness_probe():
         LivenessResponse with alive=True and current timestamp
     """
     return LivenessResponse(
-        alive=True,
-        timestamp=datetime.now(timezone.utc).isoformat()
+        alive=True, timestamp=datetime.now(timezone.utc).isoformat()
     )
 
 
@@ -899,10 +988,7 @@ async def readiness_probe():
 
     # Return 503 if not ready (Kubernetes will not route traffic)
     if not all_ready:
-        raise HTTPException(
-            status_code=503,
-            detail=response.model_dump()
-        )
+        raise HTTPException(status_code=503, detail=response.model_dump())
 
     return response
 
@@ -916,9 +1002,9 @@ async def _check_embedding_model() -> ReadinessCheck:
         test_vector = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
-                lambda: vector_store.embeddings.embed_query("readiness probe test")
+                lambda: vector_store.embeddings.embed_query("readiness probe test"),
             ),
-            timeout=10.0  # 10 second timeout
+            timeout=10.0,  # 10 second timeout
         )
         latency_ms = (time.perf_counter() - start_time) * 1000
 
@@ -930,27 +1016,27 @@ async def _check_embedding_model() -> ReadinessCheck:
             return ReadinessCheck(
                 ready=True,
                 message=f"Model loaded, {actual_dims} dimensions",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
         else:
             return ReadinessCheck(
                 ready=False,
                 message=f"Dimension mismatch: expected {expected_dims}, got {actual_dims}",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message="Embedding model timeout (>10s)",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message=f"Embedding model error: {str(e)[:100]}",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
 
 
@@ -961,43 +1047,40 @@ async def _check_ollama() -> ReadinessCheck:
         # Use the existing method from rag_pipeline
         models = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
-                None,
-                rag_pipeline.list_available_models
+                None, rag_pipeline.list_available_models
             ),
-            timeout=5.0  # 5 second timeout
+            timeout=5.0,  # 5 second timeout
         )
         latency_ms = (time.perf_counter() - start_time) * 1000
 
         if models and len(models) > 0:
             # Get first model name for display
-            model_names = [m.get('name', 'unknown') for m in models[:3]]
-            model_display = ', '.join(model_names)
+            model_names = [m.get("name", "unknown") for m in models[:3]]
+            model_display = ", ".join(model_names)
             if len(models) > 3:
                 model_display += f" (+{len(models) - 3} more)"
             return ReadinessCheck(
                 ready=True,
                 message=f"{len(models)} model(s) available: {model_display}",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
         else:
             return ReadinessCheck(
                 ready=False,
                 message="No models available in Ollama",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
-            ready=False,
-            message="Ollama timeout (>5s)",
-            latency_ms=round(latency_ms, 2)
+            ready=False, message="Ollama timeout (>5s)", latency_ms=round(latency_ms, 2)
         )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message=f"Ollama error: {str(e)[:100]}",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
 
 
@@ -1007,48 +1090,45 @@ async def _check_vector_store() -> ReadinessCheck:
     try:
         # Get collection stats using existing method
         stats = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                vector_store.get_stats
-            ),
-            timeout=5.0  # 5 second timeout
+            asyncio.get_event_loop().run_in_executor(None, vector_store.get_stats),
+            timeout=5.0,  # 5 second timeout
         )
         latency_ms = (time.perf_counter() - start_time) * 1000
 
         # Check for error in stats
-        if stats.get('error'):
+        if stats.get("error"):
             return ReadinessCheck(
                 ready=False,
                 message=f"Collection error: {stats['error'][:100]}",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
 
-        points_count = stats.get('points_count', 0)
+        points_count = stats.get("points_count", 0)
         if points_count > 0:
             return ReadinessCheck(
                 ready=True,
                 message=f"Collection has {points_count:,} documents",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
         else:
             return ReadinessCheck(
                 ready=False,
                 message="Collection exists but has no documents",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message="Vector store timeout (>5s)",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message=f"Vector store error: {str(e)[:100]}",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
 
 
@@ -1058,39 +1138,32 @@ async def _check_redis() -> ReadinessCheck:
     try:
         # Use asyncio to run the blocking Redis ping
         result = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                redis_client.ping
-            ),
-            timeout=2.0  # 2 second timeout for Redis
+            asyncio.get_event_loop().run_in_executor(None, redis_client.ping),
+            timeout=2.0,  # 2 second timeout for Redis
         )
         latency_ms = (time.perf_counter() - start_time) * 1000
 
         if result:
             return ReadinessCheck(
-                ready=True,
-                message="Connected",
-                latency_ms=round(latency_ms, 2)
+                ready=True, message="Connected", latency_ms=round(latency_ms, 2)
             )
         else:
             return ReadinessCheck(
                 ready=False,
                 message="Redis ping returned false",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
-            ready=False,
-            message="Redis timeout (>2s)",
-            latency_ms=round(latency_ms, 2)
+            ready=False, message="Redis timeout (>2s)", latency_ms=round(latency_ms, 2)
         )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message=f"Redis error: {str(e)[:100]}",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
 
 
@@ -1101,41 +1174,40 @@ async def _check_reranker() -> ReadinessCheck:
         # Get reranker status using existing method
         status = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
-                None,
-                rag_pipeline.get_reranker_status
+                None, rag_pipeline.get_reranker_status
             ),
-            timeout=5.0  # 5 second timeout
+            timeout=5.0,  # 5 second timeout
         )
         latency_ms = (time.perf_counter() - start_time) * 1000
 
-        if status.get('loaded', False):
-            model_name = status.get('model_name', 'unknown')
-            device = status.get('device', 'unknown')
+        if status.get("loaded", False):
+            model_name = status.get("model_name", "unknown")
+            device = status.get("device", "unknown")
             return ReadinessCheck(
                 ready=True,
                 message=f"Model loaded ({model_name}) on {device}",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
         else:
-            error = status.get('error', 'Not initialized')
+            error = status.get("error", "Not initialized")
             return ReadinessCheck(
                 ready=False,
                 message=f"Reranker not loaded: {error}",
-                latency_ms=round(latency_ms, 2)
+                latency_ms=round(latency_ms, 2),
             )
     except asyncio.TimeoutError:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message="Reranker check timeout (>5s)",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
     except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         return ReadinessCheck(
             ready=False,
             message=f"Reranker error: {str(e)[:100]}",
-            latency_ms=round(latency_ms, 2)
+            latency_ms=round(latency_ms, 2),
         )
 
 
@@ -1164,7 +1236,9 @@ async def chat(
 
     # Get conversation history BEFORE saving the current message
     # This is used for context-aware retrieval to resolve pronouns/references
-    conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
+    conversation_history = get_conversation_history(
+        session_id, limit=settings.conversation_context_history_limit
+    )
 
     # Save user message (use validated/trimmed query)
     save_message(session_id, "user", validated_query)
@@ -1208,23 +1282,27 @@ async def chat(
         total_time_ms = (time.time() - start_time) * 1000
 
         # Save assistant response
-        save_message(session_id, "assistant", result['response'])
+        save_message(session_id, "assistant", result["response"])
 
         # Trigger conversation summarization in background if enabled
         if settings.conversation_summarization_enabled:
             _create_background_task(
                 check_and_trigger_summarization(session_id),
-                task_name="conversation_summarization"
+                task_name="conversation_summarization",
             )
 
         # Store analytics data on request state for middleware to capture
         if settings.analytics_enabled:
-            request.state.analytics_model = result['model']
+            request.state.analytics_model = result["model"]
             request.state.analytics_query = validated_query
-            retrieval_metrics = result.get('retrieval_metrics', {})
+            retrieval_metrics = result.get("retrieval_metrics", {})
             if retrieval_metrics:
-                request.state.analytics_cache_hit = retrieval_metrics.get('embedding_cache_hit')
-                request.state.analytics_avg_score = retrieval_metrics.get('avg_similarity_score')
+                request.state.analytics_cache_hit = retrieval_metrics.get(
+                    "embedding_cache_hit"
+                )
+                request.state.analytics_avg_score = retrieval_metrics.get(
+                    "avg_similarity_score"
+                )
 
         # Log query to PostgreSQL (fire-and-forget, non-blocking)
         # Uses _create_background_task to avoid blocking response on DB write
@@ -1234,12 +1312,12 @@ async def chat(
                 log_query_to_postgres(
                     session_id=session_id,
                     query=validated_query,
-                    model=result['model'],
+                    model=result["model"],
                     result=result,
                     total_time_ms=total_time_ms,
                     user_id=user_id,
                 ),
-                task_name="query_logging"
+                task_name="query_logging",
             )
 
         # Record experiment metrics if in an active experiment
@@ -1252,12 +1330,12 @@ async def chat(
             )
 
         return ChatResponse(
-            response=result['response'],
-            model=result['model'],
-            context_used=result['context_used'],
-            sources=result['sources'],
+            response=result["response"],
+            model=result["model"],
+            context_used=result["context_used"],
+            sources=result["sources"],
             session_id=session_id,
-            retrieval_metrics=result.get('retrieval_metrics'),
+            retrieval_metrics=result.get("retrieval_metrics"),
         )
 
     except Exception as e:
@@ -1279,7 +1357,9 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
 
     # Get conversation history BEFORE saving the current message
     # This is used for context-aware retrieval to resolve pronouns/references
-    conversation_history = get_conversation_history(session_id, limit=settings.conversation_context_history_limit)
+    conversation_history = get_conversation_history(
+        session_id, limit=settings.conversation_context_history_limit
+    )
 
     # Save user message (use validated/trimmed query)
     save_message(session_id, "user", validated_query)
@@ -1304,17 +1384,17 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
                 conversation_history=conversation_history,
             ):
                 # Accumulate response content
-                if chunk.get('type') == 'content':
-                    full_response += chunk.get('content', '')
+                if chunk.get("type") == "content":
+                    full_response += chunk.get("content", "")
 
                 # Add session_id to metadata and capture analytics data
-                if chunk.get('type') == 'metadata':
-                    chunk['session_id'] = session_id
-                    model_used = chunk.get('model', model_used)
-                    retrieval_metrics = chunk.get('retrieval_metrics', {})
+                if chunk.get("type") == "metadata":
+                    chunk["session_id"] = session_id
+                    model_used = chunk.get("model", model_used)
+                    retrieval_metrics = chunk.get("retrieval_metrics", {})
                     if retrieval_metrics:
-                        cache_hit = retrieval_metrics.get('embedding_cache_hit')
-                        avg_score = retrieval_metrics.get('avg_similarity_score')
+                        cache_hit = retrieval_metrics.get("embedding_cache_hit")
+                        avg_score = retrieval_metrics.get("avg_similarity_score")
 
                 # Stream as Server-Sent Events format
                 yield f"data: {json.dumps(chunk)}\n\n"
@@ -1330,10 +1410,7 @@ async def chat_stream(chat_request: ChatRequest, request: Request):
 
         except Exception as e:
             is_error = True
-            error_chunk = {
-                'type': 'error',
-                'error': str(e)
-            }
+            error_chunk = {"type": "error", "error": str(e)}
             yield f"data: {json.dumps(error_chunk)}\n\n"
 
         finally:
@@ -1361,9 +1438,9 @@ async def list_models():
         models = rag_pipeline.list_models()
         model_infos = [
             ModelInfo(
-                name=m.get('name', ''),
-                size=str(m.get('size', '')),
-                modified=m.get('modified_at', '')
+                name=m.get("name", ""),
+                size=str(m.get("size", "")),
+                modified=m.get("modified_at", ""),
             )
             for m in models
         ]
@@ -1378,9 +1455,9 @@ async def get_stats():
     try:
         stats = vector_store.get_stats()
         return StatsResponse(
-            collection_name=stats['collection_name'],
-            vectors_count=stats.get('vectors_count', 0),
-            indexed_documents=stats.get('points_count', 0)
+            collection_name=stats["collection_name"],
+            vectors_count=stats.get("vectors_count", 0),
+            indexed_documents=stats.get("points_count", 0),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1406,6 +1483,7 @@ async def get_docs_freshness():
     try:
         # Import here to avoid circular imports and handle missing module
         import sys
+
         scripts_path = Path(__file__).parent.parent.parent / "scripts"
         if str(scripts_path) not in sys.path:
             sys.path.insert(0, str(scripts_path))
@@ -1429,7 +1507,9 @@ async def get_docs_freshness():
         ]
 
         # Calculate counts
-        stale_count = sum(1 for s in sources if s.staleness_risk in ["medium", "high", "critical"])
+        stale_count = sum(
+            1 for s in sources if s.staleness_risk in ["medium", "high", "critical"]
+        )
         fresh_count = sum(1 for s in sources if s.staleness_risk == "fresh")
 
         return FreshnessReportResponse(
@@ -1465,18 +1545,18 @@ async def get_gpu_metrics():
             [
                 "nvidia-smi",
                 "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-                "--format=csv,noheader,nounits"
+                "--format=csv,noheader,nounits",
             ],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
         )
 
         if result.returncode != 0:
             return {
                 "available": False,
                 "error": "nvidia-smi command failed",
-                "gpus": []
+                "gpus": [],
             }
 
         gpus = []
@@ -1486,21 +1566,27 @@ async def get_gpu_metrics():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 6:
                 idx, name, util, mem_used, mem_total, temp = parts[:6]
-                gpus.append({
-                    "index": int(idx),
-                    "name": name,
-                    "utilization_percent": float(util),
-                    "memory_used_mb": float(mem_used),
-                    "memory_total_mb": float(mem_total),
-                    "memory_utilization_percent": round(float(mem_used) / float(mem_total) * 100, 1) if float(mem_total) > 0 else 0,
-                    "temperature_celsius": float(temp)
-                })
+                gpus.append(
+                    {
+                        "index": int(idx),
+                        "name": name,
+                        "utilization_percent": float(util),
+                        "memory_used_mb": float(mem_used),
+                        "memory_total_mb": float(mem_total),
+                        "memory_utilization_percent": round(
+                            float(mem_used) / float(mem_total) * 100, 1
+                        )
+                        if float(mem_total) > 0
+                        else 0,
+                        "temperature_celsius": float(temp),
+                    }
+                )
 
         return {
             "available": True,
             "gpu_count": len(gpus),
             "gpus": gpus,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
 
     except subprocess.TimeoutExpired:
@@ -1531,7 +1617,7 @@ async def get_ollama_status():
             "host": settings.ollama_host,
             "running_models": ps_data.get("models", []),
             "available_models": [m.get("name") for m in tags_data.get("models", [])],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
         return {
@@ -1539,7 +1625,7 @@ async def get_ollama_status():
             "host": settings.ollama_host,
             "error": str(e),
             "running_models": [],
-            "available_models": []
+            "available_models": [],
         }
 
 
@@ -1593,7 +1679,7 @@ async def reset_circuit_breakers():
     return {
         "status": "reset",
         "message": "All circuit breakers reset to CLOSED state",
-        "services": ["ollama", "qdrant", "tavily"]
+        "services": ["ollama", "qdrant", "tavily"],
     }
 
 
@@ -1624,7 +1710,7 @@ async def get_session_context(session_id: str, max_recent: int = 5):
     return {
         "session_id": session_id,
         "summarization_enabled": settings.conversation_summarization_enabled,
-        **context
+        **context,
     }
 
 
@@ -1643,10 +1729,7 @@ async def get_session_stats(session_id: str):
     """
     if settings.conversation_summarization_enabled:
         stats = conversation_storage.get_session_stats(session_id)
-        return {
-            "summarization_enabled": True,
-            **stats
-        }
+        return {"summarization_enabled": True, **stats}
     else:
         # Return basic stats when summarization is disabled
         history = get_conversation_history(session_id, limit=100)
@@ -1681,7 +1764,7 @@ async def clear_session(session_id: str):
     return {
         "status": "cleared",
         "session_id": session_id,
-        "message": f"All conversation data for session {session_id} has been cleared"
+        "message": f"All conversation data for session {session_id} has been cleared",
     }
 
 
@@ -1690,11 +1773,8 @@ async def list_templates(category: Optional[str] = None):
     """Get prompt templates, optionally filtered by category"""
     templates = get_templates()
     if category:
-        templates = [t for t in templates if t['category'] == category]
-    return {
-        "templates": templates,
-        "categories": get_categories()
-    }
+        templates = [t for t in templates if t["category"] == category]
+    return {"templates": templates, "categories": get_categories()}
 
 
 @app.get("/api/templates/{template_id}")
@@ -1741,17 +1821,16 @@ async def render_template_endpoint(request: RenderTemplateRequest):
 
     return RenderTemplateResponse(
         template_id=request.template_id,
-        original_prompt=template.get('prompt', ''),
+        original_prompt=template.get("prompt", ""),
         rendered_prompt=rendered_prompt,
         variables_used=variables_used,
-        missing_required=missing_required
+        missing_required=missing_required,
     )
 
 
 @app.post("/api/upload")
 async def upload_documents(
-    files: List[UploadFile] = File(...),
-    auto_ingest: bool = True
+    files: List[UploadFile] = File(...), auto_ingest: bool = True
 ):
     """Upload documentation files and optionally trigger ingestion"""
 
@@ -1766,13 +1845,17 @@ async def upload_documents(
     for file in files:
         try:
             # Validate file type
-            if not (file.filename.endswith('.md') or
-                    file.filename.endswith('.txt') or
-                    file.filename.endswith('.markdown')):
-                failed_files.append({
-                    "filename": file.filename,
-                    "error": "Only .md, .txt, and .markdown files are supported"
-                })
+            if not (
+                file.filename.endswith(".md")
+                or file.filename.endswith(".txt")
+                or file.filename.endswith(".markdown")
+            ):
+                failed_files.append(
+                    {
+                        "filename": file.filename,
+                        "error": "Only .md, .txt, and .markdown files are supported",
+                    }
+                )
                 continue
 
             # Sanitize filename to prevent path traversal attacks.
@@ -1782,10 +1865,12 @@ async def upload_documents(
             safe_name = Path(file.filename).name
             file_path = (custom_docs_dir / safe_name).resolve()
             if not str(file_path).startswith(str(custom_docs_dir.resolve())):
-                failed_files.append({
-                    "filename": file.filename,
-                    "error": "Invalid filename: path traversal detected"
-                })
+                failed_files.append(
+                    {
+                        "filename": file.filename,
+                        "error": "Invalid filename: path traversal detected",
+                    }
+                )
                 continue
 
             # Enforce a 50 MB file size limit before writing to disk.
@@ -1794,23 +1879,22 @@ async def upload_documents(
             if len(content) > MAX_FILE_SIZE:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"File '{safe_name}' exceeds the 50 MB size limit ({len(content)} bytes)"
+                    detail=f"File '{safe_name}' exceeds the 50 MB size limit ({len(content)} bytes)",
                 )
 
-            with open(file_path, 'wb') as f:
+            with open(file_path, "wb") as f:
                 f.write(content)
 
-            uploaded_files.append({
-                "filename": file.filename,
-                "size": len(content),
-                "path": str(file_path)
-            })
+            uploaded_files.append(
+                {
+                    "filename": file.filename,
+                    "size": len(content),
+                    "path": str(file_path),
+                }
+            )
 
         except Exception as e:
-            failed_files.append({
-                "filename": file.filename,
-                "error": str(e)
-            })
+            failed_files.append({"filename": file.filename, "error": str(e)})
 
     result = {
         "uploaded": len(uploaded_files),
@@ -1827,24 +1911,23 @@ async def upload_documents(
                 ["python", "/scripts/ingest_docs.py"],
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=300,  # 5 minute timeout
             )
 
             result["ingestion"] = {
                 "status": "success" if ingestion_result.returncode == 0 else "failed",
                 "output": ingestion_result.stdout,
-                "error": ingestion_result.stderr if ingestion_result.returncode != 0 else None
+                "error": ingestion_result.stderr
+                if ingestion_result.returncode != 0
+                else None,
             }
         except subprocess.TimeoutExpired:
             result["ingestion"] = {
                 "status": "timeout",
-                "error": "Ingestion took longer than 5 minutes"
+                "error": "Ingestion took longer than 5 minutes",
             }
         except Exception as e:
-            result["ingestion"] = {
-                "status": "error",
-                "error": str(e)
-            }
+            result["ingestion"] = {"status": "error", "error": str(e)}
 
     return result
 
@@ -1865,7 +1948,7 @@ async def get_retrieval_metrics(last_n: int = 100):
     if not settings.enable_retrieval_metrics:
         raise HTTPException(
             status_code=503,
-            detail="Retrieval metrics are disabled. Set ENABLE_RETRIEVAL_METRICS=true"
+            detail="Retrieval metrics are disabled. Set ENABLE_RETRIEVAL_METRICS=true",
         )
 
     try:
@@ -1874,7 +1957,7 @@ async def get_retrieval_metrics(last_n: int = 100):
             "status": "ok",
             "metrics_enabled": True,
             "prometheus_enabled": ENABLE_PROMETHEUS,
-            "summary": summary
+            "summary": summary,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1928,7 +2011,9 @@ async def check_drift_status():
                 max_score=result.current_metrics.max_score,
                 sample_count=result.current_metrics.sample_count,
                 timestamp=result.current_metrics.timestamp,
-            ) if result.current_metrics else None,
+            )
+            if result.current_metrics
+            else None,
             baseline=DriftMetricsResponse(
                 mean_score=result.baseline_metrics.mean_score,
                 std_score=result.baseline_metrics.std_score,
@@ -1939,7 +2024,9 @@ async def check_drift_status():
                 max_score=result.baseline_metrics.max_score,
                 sample_count=result.baseline_metrics.sample_count,
                 timestamp=result.baseline_metrics.timestamp,
-            ) if result.baseline_metrics else None,
+            )
+            if result.baseline_metrics
+            else None,
         )
     except Exception as e:
         logger.error(f"Drift check failed: {e}")
@@ -1984,15 +2071,14 @@ async def set_drift_baseline():
         if metrics is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Insufficient data for baseline. Need at least {drift_detector.MIN_SAMPLES} samples."
+                detail=f"Insufficient data for baseline. Need at least {drift_detector.MIN_SAMPLES} samples.",
             )
 
         # Set as baseline
         success = await drift_detector.set_baseline(metrics)
         if not success:
             raise HTTPException(
-                status_code=500,
-                detail="Failed to store baseline in Redis"
+                status_code=500, detail="Failed to store baseline in Redis"
             )
 
         return SetBaselineResponse(
@@ -2008,7 +2094,7 @@ async def set_drift_baseline():
                 max_score=metrics.max_score,
                 sample_count=metrics.sample_count,
                 timestamp=metrics.timestamp,
-            )
+            ),
         )
     except HTTPException:
         raise
@@ -2057,12 +2143,11 @@ async def reset_drift_detection():
         if success:
             return {
                 "status": "reset",
-                "message": "Drift detection state cleared. Set a new baseline when ready."
+                "message": "Drift detection state cleared. Set a new baseline when ready.",
             }
         else:
             raise HTTPException(
-                status_code=500,
-                detail="Failed to reset drift detection state"
+                status_code=500, detail="Failed to reset drift detection state"
             )
     except HTTPException:
         raise
@@ -2091,7 +2176,7 @@ async def submit_feedback(request: FeedbackRequest):
             session_id=request.session_id,
             helpful=request.helpful,
             message_index=request.message_index,
-            query_hash=request.query_hash
+            query_hash=request.query_hash,
         )
 
         # Also save to PostgreSQL for analytics
@@ -2106,9 +2191,7 @@ async def submit_feedback(request: FeedbackRequest):
         feedback_id = pg_feedback_id or entry.feedback_id
 
         return FeedbackResponse(
-            status="saved",
-            feedback_id=feedback_id,
-            timestamp=entry.timestamp
+            status="saved", feedback_id=feedback_id, timestamp=entry.timestamp
         )
 
     except Exception as e:
@@ -2130,10 +2213,7 @@ async def get_feedback_stats(last_n: int = 100):
     """
     try:
         summary = get_feedback_summary(last_n=last_n)
-        return {
-            "status": "ok",
-            "summary": summary
-        }
+        return {"status": "ok", "summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2141,7 +2221,9 @@ async def get_feedback_stats(last_n: int = 100):
 @app.get("/api/analytics/realtime", response_model=RealtimeAnalyticsResponse)
 async def get_realtime_analytics(
     request: Request,
-    x_analytics_key: Optional[str] = Header(None, description="API key for protected analytics"),
+    x_analytics_key: Optional[str] = Header(
+        None, description="API key for protected analytics"
+    ),
 ):
     """Get real-time analytics snapshot for operational visibility.
 
@@ -2165,18 +2247,17 @@ async def get_realtime_analytics(
         if not expected_key:
             raise HTTPException(
                 status_code=500,
-                detail="Analytics endpoint is protected but ANALYTICS_API_KEY is not set"
+                detail="Analytics endpoint is protected but ANALYTICS_API_KEY is not set",
             )
         if x_analytics_key != expected_key:
             raise HTTPException(
-                status_code=401,
-                detail="Invalid or missing X-Analytics-Key header"
+                status_code=401, detail="Invalid or missing X-Analytics-Key header"
             )
 
     if not settings.analytics_enabled:
         raise HTTPException(
             status_code=503,
-            detail="Analytics collection is disabled. Set ANALYTICS_ENABLED=true to enable."
+            detail="Analytics collection is disabled. Set ANALYTICS_ENABLED=true to enable.",
         )
 
     collector = get_metrics_collector()
@@ -2189,28 +2270,39 @@ async def get_realtime_analytics(
         request_metrics=RequestMetrics(**analytics_data["request_metrics"]),
         latency_metrics=LatencyMetrics(**analytics_data["latency_metrics"]),
         cache_metrics=CacheMetrics(**analytics_data["cache_metrics"]),
-        retrieval_quality=RetrievalQualityMetrics(**analytics_data["retrieval_quality"]),
+        retrieval_quality=RetrievalQualityMetrics(
+            **analytics_data["retrieval_quality"]
+        ),
         model_usage={
             model: ModelUsageStats(**stats)
             for model, stats in analytics_data["model_usage"].items()
         },
-        top_queries=[
-            TopQueryEntry(**entry)
-            for entry in analytics_data["top_queries"]
-        ],
+        top_queries=[TopQueryEntry(**entry) for entry in analytics_data["top_queries"]],
     )
 
 
 @app.get("/api/analytics/queries", response_model=QueryLogsResponse)
 async def get_query_logs(
-    start_date: Optional[str] = Query(None, description="Start date (ISO format or YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format or YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(
+        None, description="Start date (ISO format or YYYY-MM-DD)"
+    ),
+    end_date: Optional[str] = Query(
+        None, description="End date (ISO format or YYYY-MM-DD)"
+    ),
     model: Optional[str] = Query(None, description="Filter by model name"),
     session_id: Optional[str] = Query(None, description="Filter by session ID"),
-    min_latency_ms: Optional[float] = Query(None, description="Minimum latency threshold"),
-    max_latency_ms: Optional[float] = Query(None, description="Maximum latency threshold"),
-    hybrid_search_used: Optional[bool] = Query(None, description="Filter by hybrid search usage"),
-    web_search_used: Optional[bool] = Query(None, description="Filter by web search usage"),
+    min_latency_ms: Optional[float] = Query(
+        None, description="Minimum latency threshold"
+    ),
+    max_latency_ms: Optional[float] = Query(
+        None, description="Maximum latency threshold"
+    ),
+    hybrid_search_used: Optional[bool] = Query(
+        None, description="Filter by hybrid search usage"
+    ),
+    web_search_used: Optional[bool] = Query(
+        None, description="Filter by web search usage"
+    ),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(50, ge=1, le=500, description="Records per page"),
 ):
@@ -2243,16 +2335,18 @@ async def get_query_logs(
             # Date range filters
             if start_date:
                 try:
-                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
                     conditions.append(QueryLog.timestamp >= start_dt)
                 except ValueError:
                     # Try parsing as date only
-                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
                     conditions.append(QueryLog.timestamp >= start_dt)
 
             if end_date:
                 try:
-                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                     conditions.append(QueryLog.timestamp <= end_dt)
                 except ValueError:
                     # Try parsing as date only (end of day)
@@ -2294,7 +2388,9 @@ async def get_query_logs(
 
             # Apply pagination and ordering
             offset = (page - 1) * page_size
-            query = query.order_by(desc(QueryLog.timestamp)).offset(offset).limit(page_size)
+            query = (
+                query.order_by(desc(QueryLog.timestamp)).offset(offset).limit(page_size)
+            )
 
             # Execute query
             result = await db.execute(query)
@@ -2303,24 +2399,26 @@ async def get_query_logs(
             # Convert to response format
             queries = []
             for log in logs:
-                queries.append(QueryLogEntry(
-                    id=str(log.id),
-                    session_id=log.session_id,
-                    query=log.query,
-                    model=log.model,
-                    timestamp=log.timestamp.isoformat() if log.timestamp else "",
-                    latency_ms=log.latency_ms,
-                    token_count=log.token_count,
-                    response_length=log.response_length,
-                    context_used=log.context_used,
-                    sources_count=log.sources_count,
-                    sources_returned=log.sources_returned,
-                    retrieval_scores=log.retrieval_scores,
-                    hybrid_search_used=log.hybrid_search_used,
-                    hyde_used=log.hyde_used,
-                    reranker_used=log.reranker_used,
-                    web_search_used=log.web_search_used,
-                ))
+                queries.append(
+                    QueryLogEntry(
+                        id=str(log.id),
+                        session_id=log.session_id,
+                        query=log.query,
+                        model=log.model,
+                        timestamp=log.timestamp.isoformat() if log.timestamp else "",
+                        latency_ms=log.latency_ms,
+                        token_count=log.token_count,
+                        response_length=log.response_length,
+                        context_used=log.context_used,
+                        sources_count=log.sources_count,
+                        sources_returned=log.sources_returned,
+                        retrieval_scores=log.retrieval_scores,
+                        hybrid_search_used=log.hybrid_search_used,
+                        hyde_used=log.hyde_used,
+                        reranker_used=log.reranker_used,
+                        web_search_used=log.web_search_used,
+                    )
+                )
 
             # Calculate total pages
             total_pages = (total + page_size - 1) // page_size if total > 0 else 1
@@ -2340,8 +2438,12 @@ async def get_query_logs(
 
 @app.get("/api/analytics/queries/summary", response_model=QueryAnalyticsSummary)
 async def get_query_analytics_summary(
-    start_date: Optional[str] = Query(None, description="Start date (ISO format or YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (ISO format or YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(
+        None, description="Start date (ISO format or YYYY-MM-DD)"
+    ),
+    end_date: Optional[str] = Query(
+        None, description="End date (ISO format or YYYY-MM-DD)"
+    ),
 ):
     """Get summary analytics for query logs.
 
@@ -2362,14 +2464,16 @@ async def get_query_analytics_summary(
             # Date range filters
             if start_date:
                 try:
-                    start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                    start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
                 except ValueError:
-                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
                 conditions.append(QueryLog.timestamp >= start_dt)
 
             if end_date:
                 try:
-                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                 except ValueError:
                     end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
                         hour=23, minute=59, second=59, tzinfo=timezone.utc
@@ -2380,17 +2484,23 @@ async def get_query_analytics_summary(
             base_condition = and_(*conditions) if conditions else True
 
             # Total queries
-            total_query = select(func.count()).select_from(QueryLog).where(base_condition)
+            total_query = (
+                select(func.count()).select_from(QueryLog).where(base_condition)
+            )
             total_result = await db.execute(total_query)
             total_queries = total_result.scalar() or 0
 
             # Unique sessions
-            sessions_query = select(func.count(func.distinct(QueryLog.session_id))).where(base_condition)
+            sessions_query = select(
+                func.count(func.distinct(QueryLog.session_id))
+            ).where(base_condition)
             sessions_result = await db.execute(sessions_query)
             unique_sessions = sessions_result.scalar() or 0
 
             # Average latency
-            avg_latency_query = select(func.avg(QueryLog.latency_ms)).where(base_condition)
+            avg_latency_query = select(func.avg(QueryLog.latency_ms)).where(
+                base_condition
+            )
             avg_result = await db.execute(avg_latency_query)
             avg_latency = avg_result.scalar()
 
@@ -2426,7 +2536,7 @@ async def get_query_analytics_summary(
 
             # Model distribution
             model_query = (
-                select(QueryLog.model, func.count().label('count'))
+                select(QueryLog.model, func.count().label("count"))
                 .where(base_condition)
                 .group_by(QueryLog.model)
             )
@@ -2437,29 +2547,37 @@ async def get_query_analytics_summary(
             feature_usage = {}
 
             # Hybrid search usage
-            hybrid_query = select(func.count()).select_from(QueryLog).where(
-                and_(base_condition, QueryLog.hybrid_search_used == True)
+            hybrid_query = (
+                select(func.count())
+                .select_from(QueryLog)
+                .where(and_(base_condition, QueryLog.hybrid_search_used))
             )
             hybrid_result = await db.execute(hybrid_query)
             feature_usage["hybrid_search"] = hybrid_result.scalar() or 0
 
             # HyDE usage
-            hyde_query = select(func.count()).select_from(QueryLog).where(
-                and_(base_condition, QueryLog.hyde_used == True)
+            hyde_query = (
+                select(func.count())
+                .select_from(QueryLog)
+                .where(and_(base_condition, QueryLog.hyde_used))
             )
             hyde_result = await db.execute(hyde_query)
             feature_usage["hyde"] = hyde_result.scalar() or 0
 
             # Reranker usage
-            reranker_query = select(func.count()).select_from(QueryLog).where(
-                and_(base_condition, QueryLog.reranker_used == True)
+            reranker_query = (
+                select(func.count())
+                .select_from(QueryLog)
+                .where(and_(base_condition, QueryLog.reranker_used))
             )
             reranker_result = await db.execute(reranker_query)
             feature_usage["reranker"] = reranker_result.scalar() or 0
 
             # Web search usage
-            web_query = select(func.count()).select_from(QueryLog).where(
-                and_(base_condition, QueryLog.web_search_used == True)
+            web_query = (
+                select(func.count())
+                .select_from(QueryLog)
+                .where(and_(base_condition, QueryLog.web_search_used))
             )
             web_result = await db.execute(web_query)
             feature_usage["web_search"] = web_result.scalar() or 0
@@ -2467,12 +2585,12 @@ async def get_query_analytics_summary(
             # Queries per day
             daily_query = (
                 select(
-                    func.date_trunc('day', QueryLog.timestamp).label('day'),
-                    func.count().label('count')
+                    func.date_trunc("day", QueryLog.timestamp).label("day"),
+                    func.count().label("count"),
                 )
                 .where(base_condition)
-                .group_by(func.date_trunc('day', QueryLog.timestamp))
-                .order_by(func.date_trunc('day', QueryLog.timestamp))
+                .group_by(func.date_trunc("day", QueryLog.timestamp))
+                .order_by(func.date_trunc("day", QueryLog.timestamp))
             )
             daily_result = await db.execute(daily_query)
             queries_per_day = {
@@ -2501,15 +2619,22 @@ async def get_query_analytics_summary(
 # A/B Testing Endpoints
 # =====================
 
+
 def _experiment_to_response(exp: Experiment) -> ExperimentResponse:
     """Convert SQLAlchemy Experiment model to Pydantic response."""
     # Convert variants from DB format to Pydantic models
-    variants_list = exp.variants if isinstance(exp.variants, list) else exp.variants.get('variants', [])
+    variants_list = (
+        exp.variants
+        if isinstance(exp.variants, list)
+        else exp.variants.get("variants", [])
+    )
     variants = [
         ExperimentVariant(
-            name=v.get('id', v.get('name', '')),
-            weight=exp.traffic_split.get(v.get('id', v.get('name', '')), 0.5) if exp.traffic_split else 0.5,
-            config={k: v for k, v in v.items() if k not in ('id', 'name')},
+            name=v.get("id", v.get("name", "")),
+            weight=exp.traffic_split.get(v.get("id", v.get("name", "")), 0.5)
+            if exp.traffic_split
+            else 0.5,
+            config={k: v for k, v in v.items() if k not in ("id", "name")},
         )
         for v in variants_list
     ]
@@ -2522,8 +2647,10 @@ def _experiment_to_response(exp: Experiment) -> ExperimentResponse:
         id=str(exp.id),
         name=exp.name,
         description=exp.description,
-        experiment_type=exp.experiment_type.value if hasattr(exp.experiment_type, 'value') else str(exp.experiment_type),
-        status=exp.status.value if hasattr(exp.status, 'value') else str(exp.status),
+        experiment_type=exp.experiment_type.value
+        if hasattr(exp.experiment_type, "value")
+        else str(exp.experiment_type),
+        status=exp.status.value if hasattr(exp.status, "value") else str(exp.status),
         variants=variants,
         traffic_percentage=traffic_percentage,
         created_at=exp.created_at.isoformat() if exp.created_at else "",
@@ -2555,14 +2682,16 @@ def _assign_variant(variants: list, traffic_split: dict, session_id: str) -> str
     # Walk through variants according to traffic split
     cumulative = 0.0
     for variant in variants:
-        variant_id = variant.get('id', variant.get('name', ''))
-        weight = traffic_split.get(variant_id, 0.0) / 100.0  # Convert percentage to decimal
+        variant_id = variant.get("id", variant.get("name", ""))
+        weight = (
+            traffic_split.get(variant_id, 0.0) / 100.0
+        )  # Convert percentage to decimal
         cumulative += weight
         if bucket < cumulative:
             return variant_id
 
     # Fallback to first variant
-    return variants[0].get('id', variants[0].get('name', '')) if variants else 'control'
+    return variants[0].get("id", variants[0].get("name", "")) if variants else "control"
 
 
 @app.post("/api/experiments", response_model=ExperimentResponse, status_code=201)
@@ -2587,19 +2716,18 @@ async def create_experiment(request: ExperimentCreate):
             if existing.scalar_one_or_none():
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Experiment with name '{request.name}' already exists"
+                    detail=f"Experiment with name '{request.name}' already exists",
                 )
 
             # Convert variants to DB format
-            variants_db = [
-                {"id": v.name, **v.config}
-                for v in request.variants
-            ]
+            variants_db = [{"id": v.name, **v.config} for v in request.variants]
 
             # Normalize weights to percentages
             total_weight = sum(v.weight for v in request.variants)
             traffic_split = {
-                v.name: (v.weight / total_weight * 100) if total_weight > 0 else (100 / len(request.variants))
+                v.name: (v.weight / total_weight * 100)
+                if total_weight > 0
+                else (100 / len(request.variants))
                 for v in request.variants
             }
 
@@ -2611,7 +2739,9 @@ async def create_experiment(request: ExperimentCreate):
                 "rag_config": ExperimentType.RAG_CONFIG,
                 "temperature": ExperimentType.TEMPERATURE,
             }
-            experiment_type = exp_type_map.get(request.experiment_type.lower(), ExperimentType.MODEL)
+            experiment_type = exp_type_map.get(
+                request.experiment_type.lower(), ExperimentType.MODEL
+            )
 
             # Create experiment
             experiment = Experiment(
@@ -2639,8 +2769,12 @@ async def create_experiment(request: ExperimentCreate):
 
 @app.get("/api/experiments", response_model=ExperimentListResponse)
 async def list_experiments(
-    status: Optional[str] = Query(None, description="Filter by status: draft, running, paused, completed"),
-    experiment_type: Optional[str] = Query(None, description="Filter by type: model, prompt, rag_config, temperature"),
+    status: Optional[str] = Query(
+        None, description="Filter by status: draft, running, paused, completed"
+    ),
+    experiment_type: Optional[str] = Query(
+        None, description="Filter by type: model, prompt, rag_config, temperature"
+    ),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(20, ge=1, le=100, description="Records per page"),
 ):
@@ -2681,7 +2815,9 @@ async def list_experiments(
                     "temperature": ExperimentType.TEMPERATURE,
                 }
                 if experiment_type.lower() in type_map:
-                    conditions.append(Experiment.experiment_type == type_map[experiment_type.lower()])
+                    conditions.append(
+                        Experiment.experiment_type == type_map[experiment_type.lower()]
+                    )
 
             if conditions:
                 query = query.where(and_(*conditions))
@@ -2695,7 +2831,11 @@ async def list_experiments(
 
             # Apply pagination and ordering
             offset = (page - 1) * page_size
-            query = query.order_by(desc(Experiment.created_at)).offset(offset).limit(page_size)
+            query = (
+                query.order_by(desc(Experiment.created_at))
+                .offset(offset)
+                .limit(page_size)
+            )
 
             result = await db.execute(query)
             experiments = result.scalars().all()
@@ -2784,22 +2924,30 @@ async def update_experiment(experiment_id: str, request: ExperimentUpdate):
 
                 if not new_status:
                     raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid status: {request.status}"
+                        status_code=400, detail=f"Invalid status: {request.status}"
                     )
 
                 # Validate state transitions
                 valid_transitions = {
-                    ExperimentStatus.DRAFT: [ExperimentStatus.RUNNING, ExperimentStatus.COMPLETED],
-                    ExperimentStatus.RUNNING: [ExperimentStatus.PAUSED, ExperimentStatus.COMPLETED],
-                    ExperimentStatus.PAUSED: [ExperimentStatus.RUNNING, ExperimentStatus.COMPLETED],
+                    ExperimentStatus.DRAFT: [
+                        ExperimentStatus.RUNNING,
+                        ExperimentStatus.COMPLETED,
+                    ],
+                    ExperimentStatus.RUNNING: [
+                        ExperimentStatus.PAUSED,
+                        ExperimentStatus.COMPLETED,
+                    ],
+                    ExperimentStatus.PAUSED: [
+                        ExperimentStatus.RUNNING,
+                        ExperimentStatus.COMPLETED,
+                    ],
                     ExperimentStatus.COMPLETED: [],  # No transitions allowed
                 }
 
                 if new_status not in valid_transitions.get(current_status, []):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Cannot transition from {current_status.value} to {new_status.value}"
+                        detail=f"Cannot transition from {current_status.value} to {new_status.value}",
                     )
 
                 experiment.status = new_status
@@ -2818,14 +2966,14 @@ async def update_experiment(experiment_id: str, request: ExperimentUpdate):
                         select(Experiment).where(
                             and_(
                                 Experiment.name == request.name,
-                                Experiment.id != uuid.UUID(experiment_id)
+                                Experiment.id != uuid.UUID(experiment_id),
                             )
                         )
                     )
                     if existing.scalar_one_or_none():
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Experiment with name '{request.name}' already exists"
+                            detail=f"Experiment with name '{request.name}' already exists",
                         )
                     experiment.name = request.name
 
@@ -2833,16 +2981,15 @@ async def update_experiment(experiment_id: str, request: ExperimentUpdate):
                     experiment.description = request.description
 
                 if request.variants:
-                    variants_db = [
-                        {"id": v.name, **v.config}
-                        for v in request.variants
-                    ]
+                    variants_db = [{"id": v.name, **v.config} for v in request.variants]
                     experiment.variants = variants_db
 
                     # Update traffic split
                     total_weight = sum(v.weight for v in request.variants)
                     experiment.traffic_split = {
-                        v.name: (v.weight / total_weight * 100) if total_weight > 0 else (100 / len(request.variants))
+                        v.name: (v.weight / total_weight * 100)
+                        if total_weight > 0
+                        else (100 / len(request.variants))
                         for v in request.variants
                     }
 
@@ -2850,8 +2997,7 @@ async def update_experiment(experiment_id: str, request: ExperimentUpdate):
                     # Scale all weights proportionally
                     scale_factor = request.traffic_percentage / 100.0
                     experiment.traffic_split = {
-                        k: v * scale_factor
-                        for k, v in experiment.traffic_split.items()
+                        k: v * scale_factor for k, v in experiment.traffic_split.items()
                     }
 
             await db.commit()
@@ -2891,7 +3037,7 @@ async def delete_experiment(experiment_id: str):
             if experiment.status == ExperimentStatus.RUNNING:
                 raise HTTPException(
                     status_code=400,
-                    detail="Cannot delete a running experiment. Complete or pause it first."
+                    detail="Cannot delete a running experiment. Complete or pause it first.",
                 )
 
             await db.delete(experiment)
@@ -2906,7 +3052,9 @@ async def delete_experiment(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/experiments/{experiment_id}/stats", response_model=ExperimentStatsResponse)
+@app.get(
+    "/api/experiments/{experiment_id}/stats", response_model=ExperimentStatsResponse
+)
 async def get_experiment_stats(experiment_id: str):
     """Get statistics and significance tests for an experiment.
 
@@ -2945,78 +3093,105 @@ async def get_experiment_stats(experiment_id: str):
             for r in results:
                 if r.variant_id not in variant_data:
                     variant_data[r.variant_id] = {
-                        'metrics': [],
-                        'conversions': 0,
-                        'count': 0,
-                        'positive_feedback': 0,
-                        'negative_feedback': 0,
+                        "metrics": [],
+                        "conversions": 0,
+                        "count": 0,
+                        "positive_feedback": 0,
+                        "negative_feedback": 0,
                     }
 
                 # Track feedback metrics separately from other metrics
-                if r.metric_name == 'feedback_positive' and r.metric_value > 0:
-                    variant_data[r.variant_id]['positive_feedback'] += 1
-                elif r.metric_name == 'feedback_negative' and r.metric_value > 0:
-                    variant_data[r.variant_id]['negative_feedback'] += 1
+                if r.metric_name == "feedback_positive" and r.metric_value > 0:
+                    variant_data[r.variant_id]["positive_feedback"] += 1
+                elif r.metric_name == "feedback_negative" and r.metric_value > 0:
+                    variant_data[r.variant_id]["negative_feedback"] += 1
                 else:
                     # Non-feedback metrics contribute to the metrics list
-                    variant_data[r.variant_id]['metrics'].append(r.metric_value)
-                    variant_data[r.variant_id]['count'] += 1
+                    variant_data[r.variant_id]["metrics"].append(r.metric_value)
+                    variant_data[r.variant_id]["count"] += 1
 
                 # Track conversions regardless of metric type
-                if r.metric_name == 'conversion' or (hasattr(r, 'is_conversion') and r.is_conversion):
-                    variant_data[r.variant_id]['conversions'] += 1
+                if r.metric_name == "conversion" or (
+                    hasattr(r, "is_conversion") and r.is_conversion
+                ):
+                    variant_data[r.variant_id]["conversions"] += 1
 
             # Build variant stats
             variant_stats = []
             for variant_id, data in variant_data.items():
-                metrics = data['metrics']
-                count = data['count']
+                metrics = data["metrics"]
+                count = data["count"]
 
                 if metrics:
                     import statistics
+
                     avg_metric = statistics.mean(metrics)
                     std_metric = statistics.stdev(metrics) if len(metrics) > 1 else 0.0
                     sorted_metrics = sorted(metrics)
-                    p50 = sorted_metrics[len(sorted_metrics) // 2] if sorted_metrics else None
+                    p50 = (
+                        sorted_metrics[len(sorted_metrics) // 2]
+                        if sorted_metrics
+                        else None
+                    )
                     p95_idx = int(len(sorted_metrics) * 0.95)
-                    p95 = sorted_metrics[min(p95_idx, len(sorted_metrics) - 1)] if sorted_metrics else None
+                    p95 = (
+                        sorted_metrics[min(p95_idx, len(sorted_metrics) - 1)]
+                        if sorted_metrics
+                        else None
+                    )
                 else:
                     avg_metric = std_metric = p50 = p95 = None
 
-                positive_fb = data.get('positive_feedback', 0)
-                negative_fb = data.get('negative_feedback', 0)
+                positive_fb = data.get("positive_feedback", 0)
+                negative_fb = data.get("negative_feedback", 0)
                 total_fb = positive_fb + negative_fb
 
-                variant_stats.append(VariantStats(
-                    variant_name=variant_id,
-                    sample_size=count,
-                    conversions=data['conversions'],
-                    conversion_rate=data['conversions'] / count if count > 0 else None,
-                    avg_latency_ms=avg_metric if experiment.success_metric == 'latency_ms' else None,
-                    p50_latency_ms=p50 if experiment.success_metric == 'latency_ms' else None,
-                    p95_latency_ms=p95 if experiment.success_metric == 'latency_ms' else None,
-                    avg_metric_value=avg_metric,
-                    std_metric_value=std_metric,
-                    positive_feedback=positive_fb,
-                    negative_feedback=negative_fb,
-                    feedback_rate=positive_fb / total_fb if total_fb > 0 else None,
-                ))
+                variant_stats.append(
+                    VariantStats(
+                        variant_name=variant_id,
+                        sample_size=count,
+                        conversions=data["conversions"],
+                        conversion_rate=data["conversions"] / count
+                        if count > 0
+                        else None,
+                        avg_latency_ms=avg_metric
+                        if experiment.success_metric == "latency_ms"
+                        else None,
+                        p50_latency_ms=p50
+                        if experiment.success_metric == "latency_ms"
+                        else None,
+                        p95_latency_ms=p95
+                        if experiment.success_metric == "latency_ms"
+                        else None,
+                        avg_metric_value=avg_metric,
+                        std_metric_value=std_metric,
+                        positive_feedback=positive_fb,
+                        negative_feedback=negative_fb,
+                        feedback_rate=positive_fb / total_fb if total_fb > 0 else None,
+                    )
+                )
 
             # Statistical significance tests
             significance_tests = []
             if len(variant_stats) >= 2:
                 control = variant_stats[0]
-                control_metrics = variant_data.get(control.variant_name, {}).get('metrics', [])
+                control_metrics = variant_data.get(control.variant_name, {}).get(
+                    "metrics", []
+                )
 
                 for treatment in variant_stats[1:]:
-                    treatment_metrics = variant_data.get(treatment.variant_name, {}).get('metrics', [])
+                    treatment_metrics = variant_data.get(
+                        treatment.variant_name, {}
+                    ).get("metrics", [])
 
                     if len(control_metrics) >= 2 and len(treatment_metrics) >= 2:
                         try:
                             from scipy import stats as scipy_stats
 
                             # Perform t-test
-                            t_stat, p_value = scipy_stats.ttest_ind(control_metrics, treatment_metrics)
+                            t_stat, p_value = scipy_stats.ttest_ind(
+                                control_metrics, treatment_metrics
+                            )
 
                             # Calculate confidence interval for difference of means
                             control_mean = statistics.mean(control_metrics)
@@ -3024,48 +3199,65 @@ async def get_experiment_stats(experiment_id: str):
                             diff = treatment_mean - control_mean
 
                             pooled_std = (
-                                (statistics.stdev(control_metrics) ** 2 / len(control_metrics) +
-                                 statistics.stdev(treatment_metrics) ** 2 / len(treatment_metrics)) ** 0.5
-                            )
+                                statistics.stdev(control_metrics) ** 2
+                                / len(control_metrics)
+                                + statistics.stdev(treatment_metrics) ** 2
+                                / len(treatment_metrics)
+                            ) ** 0.5
                             ci_margin = 1.96 * pooled_std  # 95% CI
 
-                            relative_diff = (treatment_mean - control_mean) / control_mean if control_mean != 0 else 0
+                            relative_diff = (
+                                (treatment_mean - control_mean) / control_mean
+                                if control_mean != 0
+                                else 0
+                            )
 
                             # Sample size adequacy check (rule of thumb: n >= 30 per group)
-                            adequate_sample = len(control_metrics) >= 30 and len(treatment_metrics) >= 30
+                            adequate_sample = (
+                                len(control_metrics) >= 30
+                                and len(treatment_metrics) >= 30
+                            )
 
-                            significance_tests.append(StatisticalSignificance(
-                                control_variant=control.variant_name,
-                                treatment_variant=treatment.variant_name,
-                                metric_name=experiment.success_metric,
-                                control_mean=round(control_mean, 4),
-                                treatment_mean=round(treatment_mean, 4),
-                                relative_difference=round(relative_diff, 4),
-                                p_value=round(p_value, 4) if p_value else None,
-                                confidence_interval_lower=round(diff - ci_margin, 4),
-                                confidence_interval_upper=round(diff + ci_margin, 4),
-                                is_significant=p_value < 0.05 if p_value else False,
-                                test_type="two-sample t-test",
-                                sample_size_adequate=adequate_sample,
-                                minimum_detectable_effect=None,
-                            ))
+                            significance_tests.append(
+                                StatisticalSignificance(
+                                    control_variant=control.variant_name,
+                                    treatment_variant=treatment.variant_name,
+                                    metric_name=experiment.success_metric,
+                                    control_mean=round(control_mean, 4),
+                                    treatment_mean=round(treatment_mean, 4),
+                                    relative_difference=round(relative_diff, 4),
+                                    p_value=round(p_value, 4) if p_value else None,
+                                    confidence_interval_lower=round(
+                                        diff - ci_margin, 4
+                                    ),
+                                    confidence_interval_upper=round(
+                                        diff + ci_margin, 4
+                                    ),
+                                    is_significant=p_value < 0.05 if p_value else False,
+                                    test_type="two-sample t-test",
+                                    sample_size_adequate=adequate_sample,
+                                    minimum_detectable_effect=None,
+                                )
+                            )
                         except ImportError:
                             # scipy not available, skip significance testing
-                            significance_tests.append(StatisticalSignificance(
-                                control_variant=control.variant_name,
-                                treatment_variant=treatment.variant_name,
-                                metric_name=experiment.success_metric,
-                                control_mean=control.avg_metric_value or 0,
-                                treatment_mean=treatment.avg_metric_value or 0,
-                                relative_difference=0,
-                                p_value=None,
-                                confidence_interval_lower=None,
-                                confidence_interval_upper=None,
-                                is_significant=False,
-                                test_type="unavailable (scipy required)",
-                                sample_size_adequate=False,
-                                minimum_detectable_effect=None,
-                            ))
+                            significance_tests.append(
+                                StatisticalSignificance(
+                                    control_variant=control.variant_name,
+                                    treatment_variant=treatment.variant_name,
+                                    metric_name=experiment.success_metric,
+                                    control_mean=control.avg_metric_value or 0,
+                                    treatment_mean=treatment.avg_metric_value or 0,
+                                    relative_difference=0,
+                                    p_value=None,
+                                    confidence_interval_lower=None,
+                                    confidence_interval_upper=None,
+                                    is_significant=False,
+                                    test_type="unavailable (scipy required)",
+                                    sample_size_adequate=False,
+                                    minimum_detectable_effect=None,
+                                )
+                            )
 
             # Determine winning variant
             winning_variant = None
@@ -3076,10 +3268,10 @@ async def get_experiment_stats(experiment_id: str):
                 best = max(significant_results, key=lambda x: x.relative_difference)
                 if best.relative_difference > 0:
                     winning_variant = best.treatment_variant
-                    recommendation = f"Consider adopting {best.treatment_variant} - shows {abs(best.relative_difference)*100:.1f}% improvement with p-value {best.p_value}"
+                    recommendation = f"Consider adopting {best.treatment_variant} - shows {abs(best.relative_difference) * 100:.1f}% improvement with p-value {best.p_value}"
                 else:
                     winning_variant = best.control_variant
-                    recommendation = f"Keep {best.control_variant} - treatment {best.treatment_variant} shows {abs(best.relative_difference)*100:.1f}% worse performance"
+                    recommendation = f"Keep {best.control_variant} - treatment {best.treatment_variant} shows {abs(best.relative_difference) * 100:.1f}% worse performance"
             elif variant_stats:
                 total_samples = sum(v.sample_size for v in variant_stats)
                 if total_samples < 100:
@@ -3091,7 +3283,9 @@ async def get_experiment_stats(experiment_id: str):
             duration_hours = None
             if experiment.started_at:
                 end_time = experiment.ended_at or datetime.now(timezone.utc)
-                duration_hours = (end_time - experiment.started_at).total_seconds() / 3600
+                duration_hours = (
+                    end_time - experiment.started_at
+                ).total_seconds() / 3600
 
             return ExperimentStatsResponse(
                 experiment_id=str(experiment.id),
@@ -3115,7 +3309,9 @@ async def get_experiment_stats(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/experiments/{experiment_id}/record", response_model=ExperimentResultResponse)
+@app.post(
+    "/api/experiments/{experiment_id}/record", response_model=ExperimentResultResponse
+)
 async def record_experiment_result(experiment_id: str, request: ExperimentResultRecord):
     """Record a metric/result for an experiment.
 
@@ -3143,7 +3339,7 @@ async def record_experiment_result(experiment_id: str, request: ExperimentResult
             if experiment.status != ExperimentStatus.RUNNING:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Experiment is not running (status: {experiment.status.value})"
+                    detail=f"Experiment is not running (status: {experiment.status.value})",
                 )
 
             # Create result record
@@ -3178,7 +3374,9 @@ async def record_experiment_result(experiment_id: str, request: ExperimentResult
 @app.get("/api/experiments/assignment", response_model=VariantAssignmentResponse)
 async def get_variant_assignment(
     session_id: str = Query(..., description="Session ID to get assignment for"),
-    experiment_type: Optional[str] = Query(None, description="Filter by experiment type: model, prompt, rag_config"),
+    experiment_type: Optional[str] = Query(
+        None, description="Filter by experiment type: model, prompt, rag_config"
+    ),
 ):
     """Get the variant assignment for a session.
 
@@ -3196,7 +3394,9 @@ async def get_variant_assignment(
     try:
         async with get_db_context() as db:
             # Find active (running) experiments
-            query = select(Experiment).where(Experiment.status == ExperimentStatus.RUNNING)
+            query = select(Experiment).where(
+                Experiment.status == ExperimentStatus.RUNNING
+            )
 
             if experiment_type:
                 type_map = {
@@ -3207,7 +3407,9 @@ async def get_variant_assignment(
                     "temperature": ExperimentType.TEMPERATURE,
                 }
                 if experiment_type.lower() in type_map:
-                    query = query.where(Experiment.experiment_type == type_map[experiment_type.lower()])
+                    query = query.where(
+                        Experiment.experiment_type == type_map[experiment_type.lower()]
+                    )
 
             # Order by created_at to get oldest (most established) experiment first
             query = query.order_by(Experiment.created_at)
@@ -3216,8 +3418,7 @@ async def get_variant_assignment(
 
             if not experiments:
                 raise HTTPException(
-                    status_code=404,
-                    detail="No active experiments found"
+                    status_code=404, detail="No active experiments found"
                 )
 
             # Use first matching experiment
@@ -3228,7 +3429,7 @@ async def get_variant_assignment(
                 select(ExperimentAssignment).where(
                     and_(
                         ExperimentAssignment.experiment_id == experiment.id,
-                        ExperimentAssignment.session_id == session_id
+                        ExperimentAssignment.session_id == session_id,
                     )
                 )
             )
@@ -3239,8 +3440,14 @@ async def get_variant_assignment(
                 variant_id = assignment.variant_id
             else:
                 # Assign new variant
-                variants = experiment.variants if isinstance(experiment.variants, list) else experiment.variants.get('variants', [])
-                variant_id = _assign_variant(variants, experiment.traffic_split, session_id)
+                variants = (
+                    experiment.variants
+                    if isinstance(experiment.variants, list)
+                    else experiment.variants.get("variants", [])
+                )
+                variant_id = _assign_variant(
+                    variants, experiment.traffic_split, session_id
+                )
 
                 # Store assignment
                 new_assignment = ExperimentAssignment(
@@ -3252,14 +3459,20 @@ async def get_variant_assignment(
                 await db.commit()
 
             # Get variant config
-            variants = experiment.variants if isinstance(experiment.variants, list) else experiment.variants.get('variants', [])
+            variants = (
+                experiment.variants
+                if isinstance(experiment.variants, list)
+                else experiment.variants.get("variants", [])
+            )
             variant_config = {}
             is_control = False
             for i, v in enumerate(variants):
-                v_id = v.get('id', v.get('name', ''))
+                v_id = v.get("id", v.get("name", ""))
                 if v_id == variant_id:
-                    variant_config = {k: val for k, val in v.items() if k not in ('id', 'name')}
-                    is_control = (i == 0)  # First variant is control
+                    variant_config = {
+                        k: val for k, val in v.items() if k not in ("id", "name")
+                    }
+                    is_control = i == 0  # First variant is control
                     break
 
             return VariantAssignmentResponse(
@@ -3278,7 +3491,9 @@ async def get_variant_assignment(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_active_experiment_config(session_id: str, experiment_type: str = "model") -> Optional[dict]:
+async def get_active_experiment_config(
+    session_id: str, experiment_type: str = "model"
+) -> Optional[dict]:
     """Get active experiment configuration for a session.
 
     Helper function to be used by chat endpoints to check for active experiments
@@ -3305,12 +3520,14 @@ async def get_active_experiment_config(session_id: str, experiment_type: str = "
 
             # Find running experiment of this type
             result = await db.execute(
-                select(Experiment).where(
+                select(Experiment)
+                .where(
                     and_(
                         Experiment.status == ExperimentStatus.RUNNING,
-                        Experiment.experiment_type == exp_type
+                        Experiment.experiment_type == exp_type,
                     )
-                ).order_by(Experiment.created_at)
+                )
+                .order_by(Experiment.created_at)
             )
             experiment = result.scalar_one_or_none()
 
@@ -3322,7 +3539,7 @@ async def get_active_experiment_config(session_id: str, experiment_type: str = "
                 select(ExperimentAssignment).where(
                     and_(
                         ExperimentAssignment.experiment_id == experiment.id,
-                        ExperimentAssignment.session_id == session_id
+                        ExperimentAssignment.session_id == session_id,
                     )
                 )
             )
@@ -3332,8 +3549,14 @@ async def get_active_experiment_config(session_id: str, experiment_type: str = "
                 variant_id = assignment.variant_id
             else:
                 # Assign variant
-                variants = experiment.variants if isinstance(experiment.variants, list) else experiment.variants.get('variants', [])
-                variant_id = _assign_variant(variants, experiment.traffic_split, session_id)
+                variants = (
+                    experiment.variants
+                    if isinstance(experiment.variants, list)
+                    else experiment.variants.get("variants", [])
+                )
+                variant_id = _assign_variant(
+                    variants, experiment.traffic_split, session_id
+                )
 
                 # Store assignment
                 new_assignment = ExperimentAssignment(
@@ -3345,12 +3568,18 @@ async def get_active_experiment_config(session_id: str, experiment_type: str = "
                 await db.commit()
 
             # Get variant config
-            variants = experiment.variants if isinstance(experiment.variants, list) else experiment.variants.get('variants', [])
+            variants = (
+                experiment.variants
+                if isinstance(experiment.variants, list)
+                else experiment.variants.get("variants", [])
+            )
             variant_config = {}
             for v in variants:
-                v_id = v.get('id', v.get('name', ''))
+                v_id = v.get("id", v.get("name", ""))
                 if v_id == variant_id:
-                    variant_config = {k: val for k, val in v.items() if k not in ('id', 'name')}
+                    variant_config = {
+                        k: val for k, val in v.items() if k not in ("id", "name")
+                    }
                     break
 
             return {
@@ -3401,7 +3630,9 @@ async def record_experiment_metrics(
                     experiment_id=uuid.UUID(experiment_id),
                     variant_id=variant_name,
                     session_id=session_id,
-                    metric_name="feedback_positive" if feedback_positive else "feedback_negative",
+                    metric_name="feedback_positive"
+                    if feedback_positive
+                    else "feedback_negative",
                     metric_value=1.0,
                 )
                 db.add(feedback_result)
@@ -3415,6 +3646,7 @@ async def record_experiment_metrics(
 # =====================
 # Authentication Endpoints
 # =====================
+
 
 @app.post("/api/auth/register", response_model=UserResponse, status_code=201)
 async def register_user(
@@ -3440,7 +3672,7 @@ async def register_user(
     if not settings.auth_enabled:
         raise HTTPException(
             status_code=503,
-            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable."
+            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable.",
         )
 
     try:
@@ -3493,7 +3725,7 @@ async def login_user(
     if not settings.auth_enabled:
         raise HTTPException(
             status_code=503,
-            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable."
+            detail="Authentication is not enabled. Set AUTH_ENABLED=true to enable.",
         )
 
     try:
@@ -3519,7 +3751,9 @@ async def login_user(
         await db.commit()
 
         # Calculate expiration
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.session_expire_hours)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            hours=settings.session_expire_hours
+        )
 
         return TokenResponse(
             access_token=token,
@@ -3554,19 +3788,13 @@ async def logout_user(
         HTTPException: 401 if not authenticated
     """
     if not settings.auth_enabled:
-        raise HTTPException(
-            status_code=503,
-            detail="Authentication is not enabled"
-        )
+        raise HTTPException(status_code=503, detail="Authentication is not enabled")
 
     # Extract token from header
     if authorization.lower().startswith("bearer "):
         token = authorization[7:]
     else:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authorization format"
-        )
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
 
     # Invalidate session
     success = await auth_service.invalidate_session(db, token)
@@ -3629,9 +3857,7 @@ async def update_current_user(
     """
     try:
         # Re-fetch user in this session
-        result = await db.execute(
-            select(User).where(User.id == current_user.id)
-        )
+        result = await db.execute(select(User).where(User.id == current_user.id))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -3645,8 +3871,7 @@ async def update_current_user(
             existing = existing_result.scalar_one_or_none()
             if existing and existing.id != user.id:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Email address already in use"
+                    status_code=400, detail="Email address already in use"
                 )
             user.email = request.email.lower()
 
@@ -3657,10 +3882,7 @@ async def update_current_user(
             )
             existing = existing_result.scalar_one_or_none()
             if existing and existing.id != user.id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Username already taken"
-                )
+                raise HTTPException(status_code=400, detail="Username already taken")
             user.username = request.username
 
         # Update password if provided
@@ -3713,11 +3935,12 @@ async def create_api_key_endpoint(
         expires_at = None
         if request.expires_at:
             try:
-                expires_at = datetime.fromisoformat(request.expires_at.replace('Z', '+00:00'))
+                expires_at = datetime.fromisoformat(
+                    request.expires_at.replace("Z", "+00:00")
+                )
             except ValueError:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Invalid expires_at format. Use ISO format."
+                    status_code=400, detail="Invalid expires_at format. Use ISO format."
                 )
 
         # Create API key using auth service
@@ -3774,7 +3997,7 @@ async def list_api_keys(
             .where(
                 and_(
                     APIKey.user_id == current_user.id,
-                    APIKey.is_active == True,
+                    APIKey.is_active,
                 )
             )
             .order_by(desc(APIKey.created_at))
@@ -3785,12 +4008,16 @@ async def list_api_keys(
             APIKeyResponse(
                 id=str(key.id),
                 name=key.name,
-                permissions=key.permissions.get("actions", []) if key.permissions else [],
+                permissions=key.permissions.get("actions", [])
+                if key.permissions
+                else [],
                 created_at=key.created_at.isoformat(),
                 expires_at=key.expires_at.isoformat() if key.expires_at else None,
                 last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
                 key=None,  # Never return the actual key
-                key_prefix=key.key_hash[:8] if key.key_hash else None,  # Use hash prefix as identifier
+                key_prefix=key.key_hash[:8]
+                if key.key_hash
+                else None,  # Use hash prefix as identifier
             )
             for key in api_keys
         ]
@@ -3846,7 +4073,7 @@ async def revoke_api_key_endpoint(
 # ---------------------------------------------------------------------------
 # Agentic RAG endpoint (PLAN -> RETRIEVE -> REFLECT -> DECIDE -> GENERATE -> VERIFY)
 # ---------------------------------------------------------------------------
-from pydantic import BaseModel as _AgentBaseModel
+from pydantic import BaseModel as _AgentBaseModel  # noqa: E402
 
 
 class AgentChatRequest(_AgentBaseModel):
@@ -3937,9 +4164,5 @@ if ENABLE_PROMETHEUS:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host=settings.api_host,
-        port=settings.api_port,
-        reload=True
-    )
+
+    uvicorn.run("main:app", host=settings.api_host, port=settings.api_port, reload=True)

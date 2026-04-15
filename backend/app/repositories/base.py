@@ -11,7 +11,7 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Optional, List, Any, Dict
+from typing import TypeVar, Generic, Optional, Any, Dict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import logging
@@ -26,7 +26,12 @@ T = TypeVar("T")
 class RepositoryError(Exception):
     """Base exception for repository operations."""
 
-    def __init__(self, message: str, operation: str = "", details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        message: str,
+        operation: str = "",
+        details: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(message)
         self.message = message
         self.operation = operation
@@ -40,26 +45,31 @@ class RepositoryError(Exception):
 
 class ConnectionError(RepositoryError):
     """Raised when a connection to the data store cannot be established."""
+
     pass
 
 
 class QueryError(RepositoryError):
     """Raised when a query fails to execute."""
+
     pass
 
 
 class NotFoundError(RepositoryError):
     """Raised when a requested entity is not found."""
+
     pass
 
 
 class ValidationError(RepositoryError):
     """Raised when entity validation fails."""
+
     pass
 
 
 class DuplicateError(RepositoryError):
     """Raised when attempting to create a duplicate entity."""
+
     pass
 
 
@@ -70,6 +80,7 @@ class RepositoryContext:
     Provides metadata about the current operation context,
     useful for logging, tracing, and audit purposes.
     """
+
     operation_id: Optional[str] = None
     user_id: Optional[str] = None
     session_id: Optional[str] = None
@@ -232,6 +243,7 @@ class AsyncSessionRepository(BaseRepository[T]):
         if self._session_factory is None:
             # Import here to avoid circular imports
             from app.database import get_session_factory
+
             self._session_factory = get_session_factory()
 
         self._session = self._session_factory()
@@ -250,6 +262,7 @@ class AsyncSessionRepository(BaseRepository[T]):
         """Check database connection health."""
         try:
             from sqlalchemy import text
+
             await self._session.execute(text("SELECT 1"))
             return True
         except Exception as e:

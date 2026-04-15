@@ -32,6 +32,7 @@ Environment Variables:
     TRACING_SERVICE_NAME: Service name in traces (default: devops-ai-assistant)
     TRACING_SAMPLE_RATE: Sampling ratio 0.0-1.0 (default: 1.0)
 """
+
 import logging
 import functools
 from contextlib import contextmanager
@@ -42,8 +43,8 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # Type variables for decorator
-P = ParamSpec('P')
-T = TypeVar('T')
+P = ParamSpec("P")
+T = TypeVar("T")
 
 # Global tracer instance (initialized lazily)
 _tracer = None
@@ -81,11 +82,15 @@ def init_tracing(app=None) -> bool:
         from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
         # Create resource with service information
-        resource = Resource.create({
-            SERVICE_NAME: settings.tracing_service_name,
-            "service.version": "1.0.0",
-            "deployment.environment": "production" if not settings.log_level == "debug" else "development",
-        })
+        resource = Resource.create(
+            {
+                SERVICE_NAME: settings.tracing_service_name,
+                "service.version": "1.0.0",
+                "deployment.environment": "production"
+                if not settings.log_level == "debug"
+                else "development",
+            }
+        )
 
         # Create sampler based on configured rate
         sampler = TraceIdRatioBased(settings.tracing_sample_rate)
@@ -182,6 +187,7 @@ def _instrument_libraries() -> None:
     # Instrument httpx for outgoing HTTP calls (Ollama, Tavily)
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
         logger.debug("httpx instrumentation enabled")
     except ImportError:
@@ -192,6 +198,7 @@ def _instrument_libraries() -> None:
     # Instrument Redis for cache operations
     try:
         from opentelemetry.instrumentation.redis import RedisInstrumentor
+
         RedisInstrumentor().instrument()
         logger.debug("Redis instrumentation enabled")
     except ImportError:
@@ -289,7 +296,7 @@ def create_span(
         try:
             yield span
         except Exception as e:
-            if record_exception and hasattr(span, 'record_exception'):
+            if record_exception and hasattr(span, "record_exception"):
                 span.record_exception(e)
             raise
 
@@ -315,6 +322,7 @@ def trace_rag_operation(
         def rerank_documents(docs, query):
             ...
     """
+
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
         @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -335,7 +343,7 @@ def trace_rag_operation(
                     result = func(*args, **kwargs)
                     return result
                 except Exception as e:
-                    if hasattr(span, 'record_exception'):
+                    if hasattr(span, "record_exception"):
                         span.record_exception(e)
                     raise
 
@@ -357,12 +365,13 @@ def trace_rag_operation(
                     result = await func(*args, **kwargs)
                     return result
                 except Exception as e:
-                    if hasattr(span, 'record_exception'):
+                    if hasattr(span, "record_exception"):
                         span.record_exception(e)
                     raise
 
         # Return appropriate wrapper based on function type
         import asyncio
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return wrapper

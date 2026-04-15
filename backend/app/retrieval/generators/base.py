@@ -25,6 +25,7 @@ class GenerationResult:
         prompt_tokens: Estimated prompt tokens (if available)
         completion_tokens: Estimated completion tokens (if available)
     """
+
     response: str
     model: str
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -69,7 +70,7 @@ class ResponseGenerator(ABC):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        **kwargs
+        **kwargs,
     ) -> GenerationResult:
         """Generate a response asynchronously.
 
@@ -94,7 +95,7 @@ class ResponseGenerator(ABC):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        **kwargs
+        **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Generate a streaming response asynchronously.
 

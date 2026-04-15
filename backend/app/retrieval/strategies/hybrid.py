@@ -33,6 +33,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         """Lazy load vector store to avoid circular imports."""
         if self._vector_store is None:
             from app.vectorstore import vector_store
+
             self._vector_store = vector_store
         return self._vector_store
 
@@ -40,6 +41,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         """Lazy load reranker."""
         if self._reranker is None and settings.reranker_enabled:
             from app.reranker import rerank_documents
+
             self._reranker = rerank_documents
         return self._reranker
 
@@ -47,6 +49,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         """Lazy load web searcher."""
         if self._web_searcher is None and settings.web_search_enabled:
             from app.web_search import web_searcher
+
             self._web_searcher = web_searcher
         return self._web_searcher
 
@@ -61,11 +64,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         return "vector"
 
     def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None,
-        **kwargs
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None, **kwargs
     ) -> RetrievalResult:
         """Retrieve documents synchronously."""
         result = RetrievalResult(strategy_name=self.name)
@@ -79,20 +78,18 @@ class HybridRetrievalStrategy(RetrievalStrategy):
 
         try:
             if settings.hybrid_search_enabled:
-                results_with_scores, cache_hit = vector_store.hybrid_search_with_cache_info(
-                    query=query,
-                    top_k=initial_top_k,
-                    min_score=min_score
+                results_with_scores, cache_hit = (
+                    vector_store.hybrid_search_with_cache_info(
+                        query=query, top_k=initial_top_k, min_score=min_score
+                    )
                 )
             else:
                 results_with_scores, cache_hit = vector_store.search_with_cache_info(
-                    query=query,
-                    top_k=initial_top_k,
-                    min_score=min_score
+                    query=query, top_k=initial_top_k, min_score=min_score
                 )
 
             result.cache_hit = cache_hit
-            result.metadata['initial_count'] = len(results_with_scores)
+            result.metadata["initial_count"] = len(results_with_scores)
 
         except Exception as e:
             result.error = str(e)
@@ -113,12 +110,12 @@ class HybridRetrievalStrategy(RetrievalStrategy):
             if reranker:
                 try:
                     reranked_docs = reranker(query, documents, settings.reranker_top_k)
-                    result.metadata['reranker_used'] = True
+                    result.metadata["reranker_used"] = True
 
                     # Extract rerank scores
                     rerank_scores = []
                     for doc in reranked_docs:
-                        rerank_score = doc.metadata.get('rerank_score', 0.0)
+                        rerank_score = doc.metadata.get("rerank_score", 0.0)
                         rerank_scores.append(rerank_score)
 
                     # Filter by min_rerank_score
@@ -138,7 +135,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
 
                 except Exception as e:
                     logger.error(f"Reranking failed: {e}")
-                    result.metadata['rerank_error'] = str(e)
+                    result.metadata["rerank_error"] = str(e)
                     documents = documents[:top_k]
                     scores = scores[:top_k]
         else:
@@ -158,37 +155,35 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                 should_search, reason = web_searcher.should_search(
                     avg_similarity_score=avg_score,
                     max_similarity_score=max_score,
-                    result_count=len(documents)
+                    result_count=len(documents),
                 )
 
                 if should_search:
                     try:
                         web_response = web_searcher.search_sync(query)
-                        result.metadata['web_search_used'] = web_response.triggered and not web_response.error
+                        result.metadata["web_search_used"] = (
+                            web_response.triggered and not web_response.error
+                        )
                         if web_response.results:
-                            result.metadata['web_search_context'] = web_searcher.format_for_context(
-                                web_response.results
+                            result.metadata["web_search_context"] = (
+                                web_searcher.format_for_context(web_response.results)
                             )
                     except Exception as e:
                         logger.error(f"Web search failed: {e}")
-                        result.metadata['web_search_error'] = str(e)
+                        result.metadata["web_search_error"] = str(e)
 
         result.timing_ms = (time.perf_counter() - start_time) * 1000
         return result
 
     async def retrieve_async(
-        self,
-        query: str,
-        top_k: int = 5,
-        min_score: Optional[float] = None,
-        **kwargs
+        self, query: str, top_k: int = 5, min_score: Optional[float] = None, **kwargs
     ) -> RetrievalResult:
         """Retrieve documents asynchronously."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None,
-            lambda: self.retrieve(query, top_k, min_score, **kwargs)
+            None, lambda: self.retrieve(query, top_k, min_score, **kwargs)
         )
 
     def get_config(self) -> Dict[str, Any]:

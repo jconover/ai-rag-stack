@@ -25,6 +25,7 @@ Usage:
     # For async code (FastAPI endpoints)
     client = await get_async_redis_client()
 """
+
 import logging
 import threading
 from typing import Optional
@@ -195,7 +196,9 @@ def get_redis_pool_stats() -> dict:
     if _bytes_redis_pool is not None:
         try:
             stats["current_connections"] = len(_bytes_redis_pool._in_use_connections)
-            stats["available_connections"] = len(_bytes_redis_pool._available_connections)
+            stats["available_connections"] = len(
+                _bytes_redis_pool._available_connections
+            )
             stats["bytes_pool"] = {
                 "current_connections": len(_bytes_redis_pool._in_use_connections),
                 "available_connections": len(_bytes_redis_pool._available_connections),
@@ -211,8 +214,12 @@ def get_redis_pool_stats() -> dict:
             # Add to totals
             current = stats.get("current_connections", 0)
             available = stats.get("available_connections", 0)
-            stats["current_connections"] = current + len(_string_redis_pool._in_use_connections)
-            stats["available_connections"] = available + len(_string_redis_pool._available_connections)
+            stats["current_connections"] = current + len(
+                _string_redis_pool._in_use_connections
+            )
+            stats["available_connections"] = available + len(
+                _string_redis_pool._available_connections
+            )
             stats["string_pool"] = {
                 "current_connections": len(_string_redis_pool._in_use_connections),
                 "available_connections": len(_string_redis_pool._available_connections),

@@ -16,6 +16,7 @@ Usage:
     else:
         # Use original query directly
 """
+
 import asyncio
 import logging
 import re
@@ -122,57 +123,51 @@ class HyDEExpander:
     # Patterns that indicate the query is already specific enough
     SKIP_PATTERNS = {
         # Error messages and stack traces
-        'error_message': re.compile(
-            r'(error|exception|traceback|failed|cannot|unable|denied|refused|timeout|'
-            r'connection refused|permission denied|not found|no such|invalid|'
-            r'ENOENT|EACCES|ETIMEDOUT|OOMKilled|CrashLoopBackOff)',
-            re.IGNORECASE
+        "error_message": re.compile(
+            r"(error|exception|traceback|failed|cannot|unable|denied|refused|timeout|"
+            r"connection refused|permission denied|not found|no such|invalid|"
+            r"ENOENT|EACCES|ETIMEDOUT|OOMKilled|CrashLoopBackOff)",
+            re.IGNORECASE,
         ),
-
         # CLI commands (kubectl, docker, terraform, etc.)
-        'cli_command': re.compile(
-            r'^(kubectl|docker|terraform|ansible|helm|git|aws|gcloud|az|'
-            r'systemctl|journalctl|curl|wget|ssh|scp|rsync|make|npm|pip|'
-            r'podman|crictl|istioctl|argocd|flux)\s+',
-            re.IGNORECASE
+        "cli_command": re.compile(
+            r"^(kubectl|docker|terraform|ansible|helm|git|aws|gcloud|az|"
+            r"systemctl|journalctl|curl|wget|ssh|scp|rsync|make|npm|pip|"
+            r"podman|crictl|istioctl|argocd|flux)\s+",
+            re.IGNORECASE,
         ),
-
         # File paths
-        'file_path': re.compile(
-            r'(/[a-zA-Z0-9_.-]+){2,}|'
-            r'[a-zA-Z]:\\\\|'
-            r'\.(yaml|yml|json|tf|md|py|sh|conf|config)$',
-            re.IGNORECASE
+        "file_path": re.compile(
+            r"(/[a-zA-Z0-9_.-]+){2,}|"
+            r"[a-zA-Z]:\\\\|"
+            r"\.(yaml|yml|json|tf|md|py|sh|conf|config)$",
+            re.IGNORECASE,
         ),
-
         # Configuration snippets (YAML, JSON-like)
-        'config_snippet': re.compile(
-            r'(apiVersion:|kind:|metadata:|spec:|name:|image:|ports:|'
+        "config_snippet": re.compile(
+            r"(apiVersion:|kind:|metadata:|spec:|name:|image:|ports:|"
             r'"[^"]+"\s*:\s*["\[{]|'
-            r'^\s*-\s+\w+:)',
-            re.IGNORECASE | re.MULTILINE
+            r"^\s*-\s+\w+:)",
+            re.IGNORECASE | re.MULTILINE,
         ),
-
         # Log entries
-        'log_entry': re.compile(
-            r'\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}|'
-            r'\[(INFO|WARN|ERROR|DEBUG|FATAL)\]|'
-            r'level=(info|warn|error|debug)',
-            re.IGNORECASE
+        "log_entry": re.compile(
+            r"\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}|"
+            r"\[(INFO|WARN|ERROR|DEBUG|FATAL)\]|"
+            r"level=(info|warn|error|debug)",
+            re.IGNORECASE,
         ),
-
         # IP addresses, ports, URLs
-        'network_specific': re.compile(
-            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?|'
-            r'https?://[^\s]+|'
-            r':[0-9]{2,5}\b'
+        "network_specific": re.compile(
+            r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?|"
+            r"https?://[^\s]+|"
+            r":[0-9]{2,5}\b"
         ),
-
         # Resource names with specific identifiers
-        'resource_identifier': re.compile(
-            r'[a-z0-9]+-[a-z0-9]+-[a-z0-9]+|'  # UUID-like patterns
-            r'sha256:[a-f0-9]{64}|'  # Container image digests
-            r'[a-f0-9]{40}'  # Git commit hashes
+        "resource_identifier": re.compile(
+            r"[a-z0-9]+-[a-z0-9]+-[a-z0-9]+|"  # UUID-like patterns
+            r"sha256:[a-f0-9]{64}|"  # Container image digests
+            r"[a-f0-9]{40}"  # Git commit hashes
         ),
     }
 
@@ -290,12 +285,12 @@ Documentation:"""
                 model=self.config.model,
                 prompt=prompt,
                 options={
-                    'temperature': self.config.temperature,
-                    'num_predict': self.config.max_tokens,
-                }
+                    "temperature": self.config.temperature,
+                    "num_predict": self.config.max_tokens,
+                },
             )
 
-            hypothetical_doc = response.get('response', '').strip()
+            hypothetical_doc = response.get("response", "").strip()
 
             if hypothetical_doc:
                 result.hypothetical_document = hypothetical_doc
@@ -344,10 +339,12 @@ Documentation:"""
         try:
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, self._generate_sync, query),
-                timeout=self.config.timeout_seconds
+                timeout=self.config.timeout_seconds,
             )
         except asyncio.TimeoutError:
-            result.error = f"HyDE generation timed out after {self.config.timeout_seconds}s"
+            result.error = (
+                f"HyDE generation timed out after {self.config.timeout_seconds}s"
+            )
             logger.warning(result.error)
         except Exception as e:
             result.error = str(e)
@@ -393,14 +390,14 @@ Documentation:"""
             Dictionary with configuration and status information
         """
         return {
-            'enabled': self.config.enabled,
-            'model': self.config.model,
-            'temperature': self.config.temperature,
-            'max_tokens': self.config.max_tokens,
-            'min_query_length': self.config.min_query_length,
-            'max_query_length': self.config.max_query_length,
-            'timeout_seconds': self.config.timeout_seconds,
-            'skip_patterns': list(self.SKIP_PATTERNS.keys()),
+            "enabled": self.config.enabled,
+            "model": self.config.model,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "min_query_length": self.config.min_query_length,
+            "max_query_length": self.config.max_query_length,
+            "timeout_seconds": self.config.timeout_seconds,
+            "skip_patterns": list(self.SKIP_PATTERNS.keys()),
         }
 
 

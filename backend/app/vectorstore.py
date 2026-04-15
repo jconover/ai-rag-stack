@@ -11,9 +11,9 @@ Performance optimizations:
 - Scalar quantization for memory efficiency
 - Circuit breaker protection for resilience
 """
-from typing import List, Optional, Tuple, Dict, Any, Union
-from functools import lru_cache
-from dataclasses import dataclass, field
+
+from typing import List, Optional, Tuple, Dict, Any
+from dataclasses import dataclass
 import logging
 import hashlib
 import json
@@ -25,7 +25,6 @@ import redis
 from app.circuit_breaker import (
     qdrant_circuit_breaker,
     CircuitBreakerOpen,
-    get_service_unavailable_message,
 )
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -44,20 +43,19 @@ from qdrant_client.models import (
     MatchValue,
     PayloadSchemaType,
     SearchRequest,
-    SparseVectorParams,
-    SparseIndexParams,
     NamedVector,
     NamedSparseVector,
     SparseVector as QdrantSparseVector,
 )
 from langchain_huggingface import HuggingFaceEmbeddings
+
 try:
     from langchain_core.documents import Document
 except ImportError:
     from langchain.schema import Document
 
 from app.config import settings
-from app.device_utils import get_optimal_device, get_actual_embedding_device
+from app.device_utils import get_actual_embedding_device
 from app.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
@@ -97,7 +95,7 @@ def get_shared_embeddings() -> HuggingFaceEmbeddings:
                 )
                 _embedding_model = HuggingFaceEmbeddings(
                     model_name=settings.embedding_model,
-                    model_kwargs={'device': actual_device}
+                    model_kwargs={"device": actual_device},
                 )
                 # Warmup the model to eliminate first-query cold-start latency
                 _embedding_model.embed_query("warmup")
@@ -115,6 +113,7 @@ _sparse_encoder = None
 @dataclass
 class EmbeddingResult:
     """Result from embedding generation with cache tracking."""
+
     vector: List[float]
     cache_hit: bool
 
@@ -181,8 +180,10 @@ class RedisEmbeddingCache:
         the embedding model is changed (different models produce different
         vector representations for the same query).
         """
-        model_hash = hashlib.md5(settings.embedding_model.encode('utf-8')).hexdigest()[:8]
-        query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()
+        model_hash = hashlib.md5(settings.embedding_model.encode("utf-8")).hexdigest()[
+            :8
+        ]
+        query_hash = hashlib.md5(query.encode("utf-8")).hexdigest()
         return f"{self.CACHE_PREFIX}{model_hash}:{query_hash}"
 
     def get(self, query: str) -> Optional[List[float]]:
@@ -204,7 +205,7 @@ class RedisEmbeddingCache:
 
             if cached_data is not None:
                 # Deserialize embedding vector from JSON
-                vector = json.loads(cached_data.decode('utf-8'))
+                vector = json.loads(cached_data.decode("utf-8"))
                 self._hits += 1
                 logger.debug(f"Embedding cache HIT for query hash {cache_key[-8:]}")
                 return vector
@@ -245,12 +246,10 @@ class RedisEmbeddingCache:
             vector_json = json.dumps(vector)
 
             # Store with TTL
-            self._redis_client.setex(
-                cache_key,
-                self._ttl,
-                vector_json.encode('utf-8')
+            self._redis_client.setex(cache_key, self._ttl, vector_json.encode("utf-8"))
+            logger.debug(
+                f"Cached embedding for query hash {cache_key[-8:]} (TTL: {self._ttl}s)"
             )
-            logger.debug(f"Cached embedding for query hash {cache_key[-8:]} (TTL: {self._ttl}s)")
             return True
 
         except redis.RedisError as e:
@@ -286,9 +285,7 @@ class RedisEmbeddingCache:
                 count = 0
                 while True:
                     cursor, keys = self._redis_client.scan(
-                        cursor=cursor,
-                        match=f"{self.CACHE_PREFIX}*",
-                        count=100
+                        cursor=cursor, match=f"{self.CACHE_PREFIX}*", count=100
                     )
                     count += len(keys)
                     if cursor == 0:
@@ -315,9 +312,7 @@ class RedisEmbeddingCache:
             deleted = 0
             while True:
                 cursor, keys = self._redis_client.scan(
-                    cursor=cursor,
-                    match=f"{self.CACHE_PREFIX}*",
-                    count=100
+                    cursor=cursor, match=f"{self.CACHE_PREFIX}*", count=100
                 )
                 if keys:
                     deleted += self._redis_client.delete(*keys)
@@ -350,12 +345,14 @@ class RedisEmbeddingCache:
 # Global Redis embedding cache instance
 _embedding_cache = RedisEmbeddingCache()
 
+
 def _get_sparse_encoder():
     """Get or initialize the sparse encoder for hybrid search."""
     global _sparse_encoder
     if _sparse_encoder is None and settings.hybrid_search_enabled:
         try:
             from app.sparse_encoder import SparseEncoder
+
             _sparse_encoder = SparseEncoder()
         except Exception as e:
             logger.warning(f"Failed to initialize sparse encoder: {e}")
@@ -430,12 +427,12 @@ class VectorStore:
 
     # Pattern to detect code-related queries for specialized embedding
     CODE_QUERY_PATTERN = re.compile(
-        r'(code|function|class|method|implement|syntax|example|snippet|'
-        r'how to|how do i|write|create|def |class |async |await |'
-        r'import |from |return |print\(|console\.|'
-        r'kubectl|docker|terraform|ansible|helm|yaml|json|'
-        r'error|exception|traceback|debug|fix)',
-        re.IGNORECASE
+        r"(code|function|class|method|implement|syntax|example|snippet|"
+        r"how to|how do i|write|create|def |class |async |await |"
+        r"import |from |return |print\(|console\.|"
+        r"kubectl|docker|terraform|ansible|helm|yaml|json|"
+        r"error|exception|traceback|debug|fix)",
+        re.IGNORECASE,
     )
 
     # Class-level cache for collection capabilities (sparse vector support, etc.)
@@ -478,6 +475,7 @@ class VectorStore:
             - has_sparse: bool indicating if collection has sparse vector support
         """
         import time
+
         cache_key = collection_name
         now = time.time()
 
@@ -491,14 +489,16 @@ class VectorStore:
         try:
             collection_info = self.client.get_collection(collection_name)
             has_sparse = False
-            if hasattr(collection_info.config, 'params'):
+            if hasattr(collection_info.config, "params"):
                 params = collection_info.config.params
-                if hasattr(params, 'sparse_vectors') and params.sparse_vectors:
+                if hasattr(params, "sparse_vectors") and params.sparse_vectors:
                     has_sparse = self.SPARSE_VECTOR_NAME in params.sparse_vectors
 
             capabilities = {"has_sparse": has_sparse}
             self._collection_capabilities_cache[cache_key] = (capabilities, now)
-            logger.debug(f"Cached collection capabilities for '{collection_name}': {capabilities}")
+            logger.debug(
+                f"Cached collection capabilities for '{collection_name}': {capabilities}"
+            )
             return capabilities
         except Exception as e:
             logger.warning(f"Failed to get collection capabilities: {e}")
@@ -526,7 +526,7 @@ class VectorStore:
         original_query = query
 
         # Step 1: Normalize whitespace - collapse multiple spaces to single space
-        query = re.sub(r'\s+', ' ', query).strip()
+        query = re.sub(r"\s+", " ", query).strip()
 
         # Step 2: Expand DevOps abbreviations (case-insensitive)
         # We need to be careful to match whole words only to avoid
@@ -536,7 +536,7 @@ class VectorStore:
             # Build pattern to match whole word, case-insensitive
             # Handle special characters in abbreviation (like ci/cd)
             escaped_abbrev = re.escape(abbrev)
-            pattern = rf'\b{escaped_abbrev}\b'
+            pattern = rf"\b{escaped_abbrev}\b"
 
             if re.search(pattern, query, re.IGNORECASE):
                 # Replace with expansion
@@ -551,7 +551,7 @@ class VectorStore:
             )
 
         # Step 3: Final whitespace cleanup (in case expansions introduced extra spaces)
-        query = re.sub(r'\s+', ' ', query).strip()
+        query = re.sub(r"\s+", " ", query).strip()
 
         return query
 
@@ -611,7 +611,9 @@ class VectorStore:
                 quantization_config=quantization_config,
                 optimizers_config=optimizers_config,
             )
-            logger.info(f"Created collection '{self.collection_name}' with optimized settings")
+            logger.info(
+                f"Created collection '{self.collection_name}' with optimized settings"
+            )
         else:
             # Update existing collection HNSW params if needed
             self._update_collection_params()
@@ -687,16 +689,20 @@ class VectorStore:
         # Cache miss - generate embedding
         # Add BGE instruction prefix for better retrieval quality
         embed_query = processed_query
-        if 'bge' in settings.embedding_model.lower():
+        if "bge" in settings.embedding_model.lower():
             # Use code-specific instruction for code-related queries
             if self._is_code_query(processed_query):
                 embed_query = f"{self.BGE_CODE_QUERY_INSTRUCTION}{processed_query}"
-                logger.debug(f"Using code-specific BGE instruction for query: {processed_query[:50]}...")
+                logger.debug(
+                    f"Using code-specific BGE instruction for query: {processed_query[:50]}..."
+                )
             else:
                 embed_query = f"{self.BGE_QUERY_INSTRUCTION}{processed_query}"
 
         vector = self.embeddings.embed_query(embed_query)
-        _embedding_cache.put(processed_query, vector)  # Cache with processed query as key
+        _embedding_cache.put(
+            processed_query, vector
+        )  # Cache with processed query as key
         return EmbeddingResult(vector=vector, cache_hit=False)
 
     def get_embedding_cache_stats(self) -> Dict[str, Any]:
@@ -707,7 +713,9 @@ class VectorStore:
         """Clear the embedding cache. Returns number of entries cleared."""
         return _embedding_cache.clear()
 
-    def _normalize_score(self, score: float, distance: Distance = Distance.COSINE) -> float:
+    def _normalize_score(
+        self, score: float, distance: Distance = Distance.COSINE
+    ) -> float:
         """
         Normalize similarity score to 0-1 range.
 
@@ -733,6 +741,7 @@ class VectorStore:
             # Euclidean distance: score = -distance
             # Convert to similarity using exponential decay
             import math
+
             return math.exp(score)  # score is negative distance
         return score
 
@@ -798,13 +807,16 @@ class VectorStore:
             # Reconstruct Document from payload
             payload = hit.payload or {}
             doc = Document(
-                page_content=payload.get('page_content', ''),
+                page_content=payload.get("page_content", ""),
                 metadata={
-                    'source': payload.get('source', 'Unknown'),
-                    'source_type': payload.get('source_type', 'Unknown'),
-                    **{k: v for k, v in payload.items()
-                       if k not in ('page_content', 'source', 'source_type')}
-                }
+                    "source": payload.get("source", "Unknown"),
+                    "source_type": payload.get("source_type", "Unknown"),
+                    **{
+                        k: v
+                        for k, v in payload.items()
+                        if k not in ("page_content", "source", "source_type")
+                    },
+                },
             )
             documents_with_scores.append((doc, normalized_score))
 
@@ -938,7 +950,9 @@ class VectorStore:
             logger.warning(f"Qdrant circuit breaker open: {e}")
             return [], embedding_result.cache_hit
 
-        return self._process_search_results(results, min_score, top_k), embedding_result.cache_hit
+        return self._process_search_results(
+            results, min_score, top_k
+        ), embedding_result.cache_hit
 
     def search_batch(
         self,
@@ -1144,6 +1158,7 @@ class VectorStore:
 
         # Execute dense search (using named vector for hybrid collections) with circuit breaker
         try:
+
             def _execute_dense_search():
                 return self.client.search(
                     collection_name=self.collection_name,
@@ -1173,6 +1188,7 @@ class VectorStore:
 
         if has_sparse and sparse_vector.indices:
             try:
+
                 def _execute_sparse_search():
                     return self.client.search(
                         collection_name=self.collection_name,
@@ -1181,7 +1197,7 @@ class VectorStore:
                             vector=QdrantSparseVector(
                                 indices=sparse_vector.indices,
                                 values=sparse_vector.values,
-                            )
+                            ),
                         ),
                         limit=fetch_limit,
                         query_filter=query_filter,
@@ -1198,11 +1214,17 @@ class VectorStore:
 
         # If no sparse results, return dense results only
         if not sparse_results:
-            return self._process_search_results(dense_results, min_score, top_k), embedding_result.cache_hit
+            return self._process_search_results(
+                dense_results, min_score, top_k
+            ), embedding_result.cache_hit
 
         # Convert results to (Document, score) format for RRF
-        dense_docs_scores = self._process_search_results(dense_results, 0.0, fetch_limit)
-        sparse_docs_scores = self._process_search_results(sparse_results, 0.0, fetch_limit)
+        dense_docs_scores = self._process_search_results(
+            dense_results, 0.0, fetch_limit
+        )
+        sparse_docs_scores = self._process_search_results(
+            sparse_results, 0.0, fetch_limit
+        )
 
         # Apply Reciprocal Rank Fusion
         from app.sparse_encoder import reciprocal_rank_fusion
@@ -1216,7 +1238,8 @@ class VectorStore:
 
         # Apply minimum score threshold and limit
         filtered_results = [
-            (doc, score) for doc, score in fused_results
+            (doc, score)
+            for doc, score in fused_results
             if score >= min_score * 0.01  # RRF scores are much smaller
         ][:top_k]
 
@@ -1299,11 +1322,15 @@ class VectorStore:
             try:
                 sparse_vector = sparse_encoder.encode_query(processed_query)
             except Exception as e:
-                logger.warning(f"Sparse encoding failed: {e}, falling back to dense-only")
+                logger.warning(
+                    f"Sparse encoding failed: {e}, falling back to dense-only"
+                )
 
         # If no sparse support or encoding failed, use dense only
         if not has_sparse or sparse_vector is None or not sparse_vector.indices:
-            logger.debug("Collection doesn't support sparse vectors or sparse encoding failed, using dense only")
+            logger.debug(
+                "Collection doesn't support sparse vectors or sparse encoding failed, using dense only"
+            )
             results = self.search_with_scores(
                 query=query,
                 top_k=top_k,
@@ -1328,6 +1355,7 @@ class VectorStore:
 
         async def _async_dense_search():
             """Execute dense search in thread pool."""
+
             def _execute():
                 try:
                     return qdrant_circuit_breaker.call(
@@ -1354,6 +1382,7 @@ class VectorStore:
 
         async def _async_sparse_search():
             """Execute sparse search in thread pool."""
+
             def _execute():
                 try:
                     return qdrant_circuit_breaker.call(
@@ -1364,7 +1393,7 @@ class VectorStore:
                                 vector=QdrantSparseVector(
                                     indices=sparse_vector.indices,
                                     values=sparse_vector.values,
-                                )
+                                ),
                             ),
                             limit=fetch_limit,
                             query_filter=query_filter,
@@ -1372,7 +1401,9 @@ class VectorStore:
                         )
                     )
                 except CircuitBreakerOpen as e:
-                    logger.warning(f"Qdrant circuit breaker open for sparse search: {e}")
+                    logger.warning(
+                        f"Qdrant circuit breaker open for sparse search: {e}"
+                    )
                     return []
                 except Exception as e:
                     logger.warning(f"Sparse search failed: {e}")
@@ -1388,11 +1419,17 @@ class VectorStore:
 
         # If no sparse results, return dense results only
         if not sparse_results:
-            return self._process_search_results(dense_results, min_score, top_k), embedding_result.cache_hit
+            return self._process_search_results(
+                dense_results, min_score, top_k
+            ), embedding_result.cache_hit
 
         # Convert results to (Document, score) format for RRF
-        dense_docs_scores = self._process_search_results(dense_results, 0.0, fetch_limit)
-        sparse_docs_scores = self._process_search_results(sparse_results, 0.0, fetch_limit)
+        dense_docs_scores = self._process_search_results(
+            dense_results, 0.0, fetch_limit
+        )
+        sparse_docs_scores = self._process_search_results(
+            sparse_results, 0.0, fetch_limit
+        )
 
         # Apply Reciprocal Rank Fusion
         from app.sparse_encoder import reciprocal_rank_fusion
@@ -1406,7 +1443,8 @@ class VectorStore:
 
         # Apply minimum score threshold and limit
         filtered_results = [
-            (doc, score) for doc, score in fused_results
+            (doc, score)
+            for doc, score in fused_results
             if score >= min_score * 0.01  # RRF scores are much smaller
         ][:top_k]
 
@@ -1426,12 +1464,16 @@ class VectorStore:
             optimizer_status = "unknown"
             if collection_info.optimizer_status:
                 # Try different attribute patterns for different API versions
-                optimizer_status = str(getattr(collection_info.optimizer_status, 'status', None) or
-                                       getattr(collection_info.optimizer_status, '__root__', None) or
-                                       collection_info.optimizer_status)
+                optimizer_status = str(
+                    getattr(collection_info.optimizer_status, "status", None)
+                    or getattr(collection_info.optimizer_status, "__root__", None)
+                    or collection_info.optimizer_status
+                )
 
             # Note: newer qdrant-client versions use indexed_vectors_count instead of vectors_count
-            indexed_vectors = getattr(collection_info, 'indexed_vectors_count', None) or 0
+            indexed_vectors = (
+                getattr(collection_info, "indexed_vectors_count", None) or 0
+            )
 
             return {
                 "collection_name": self.collection_name,
@@ -1453,7 +1495,7 @@ class VectorStore:
                 "collection_name": self.collection_name,
                 "vectors_count": 0,
                 "points_count": 0,
-                "error": str(e)
+                "error": str(e),
             }
 
     def get_source_types(self) -> List[str]:
@@ -1470,8 +1512,8 @@ class VectorStore:
 
             source_types = set()
             for point in result:
-                if point.payload and 'source_type' in point.payload:
-                    source_types.add(point.payload['source_type'])
+                if point.payload and "source_type" in point.payload:
+                    source_types.add(point.payload["source_type"])
 
             return sorted(list(source_types))
         except Exception as e:
@@ -1507,7 +1549,7 @@ class VectorStore:
                 collection_name=self.collection_name,
                 optimizer_config=OptimizersConfigDiff(
                     indexing_threshold=0,  # Force immediate indexing
-                )
+                ),
             )
 
             # Reset to normal threshold
@@ -1515,10 +1557,13 @@ class VectorStore:
                 collection_name=self.collection_name,
                 optimizer_config=OptimizersConfigDiff(
                     indexing_threshold=20000,
-                )
+                ),
             )
 
-            return {"status": "optimization_triggered", "collection": self.collection_name}
+            return {
+                "status": "optimization_triggered",
+                "collection": self.collection_name,
+            }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1546,7 +1591,10 @@ class VectorStore:
                     ]
                 ),
             )
-            return {"status": "success", "operation_id": str(result.operation_id) if result else None}
+            return {
+                "status": "success",
+                "operation_id": str(result.operation_id) if result else None,
+            }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -1581,7 +1629,7 @@ class VectorStore:
             return {
                 "status": "success",
                 "deleted_count": count,
-                "operation_id": str(result.operation_id) if result else None
+                "operation_id": str(result.operation_id) if result else None,
             }
         except Exception as e:
             return {"status": "error", "error": str(e), "deleted_count": 0}
@@ -1675,8 +1723,8 @@ class VectorStore:
                 )
 
                 for point in result:
-                    if point.payload and 'source' in point.payload:
-                        sources.add(point.payload['source'])
+                    if point.payload and "source" in point.payload:
+                        sources.add(point.payload["source"])
 
                 if offset is None:
                     break
@@ -1720,6 +1768,7 @@ class VectorStore:
         the generated point id on success, ``None`` on failure.
         """
         import uuid as _uuid
+
         try:
             self.ensure_eval_collection()
             question = record.get("question", "") or ""

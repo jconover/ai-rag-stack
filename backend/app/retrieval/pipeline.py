@@ -8,10 +8,9 @@ import logging
 import time
 from typing import Optional, List, Dict, Any, AsyncIterator
 
-from app.retrieval.base import RetrievalResult
 from app.retrieval.expanders.base import QueryExpander, ExpansionResult
 from app.retrieval.strategies.hybrid import HybridRetrievalStrategy
-from app.retrieval.generators.base import ResponseGenerator, GenerationResult
+from app.retrieval.generators.base import ResponseGenerator
 from app.retrieval.generators.ollama import OllamaGenerator
 from app.config import settings
 
@@ -79,8 +78,7 @@ class RAGPipelineOrchestrator:
 
             try:
                 result = await expander.expand_async(
-                    current_query,
-                    conversation_history=conversation_history
+                    current_query, conversation_history=conversation_history
                 )
 
                 all_metadata[expander.name] = result.to_dict()
@@ -115,13 +113,15 @@ class RAGPipelineOrchestrator:
 
         context_parts = []
         for i, doc in enumerate(documents, 1):
-            source = doc.metadata.get('source', 'Unknown')
+            source = doc.metadata.get("source", "Unknown")
             content = doc.page_content.strip()
             context_parts.append(f"[Source {i}: {source}]\n{content}")
 
         return "\n\n---\n\n".join(context_parts)
 
-    def _format_sources(self, documents: List[Any], scores: List[float]) -> List[Dict[str, Any]]:
+    def _format_sources(
+        self, documents: List[Any], scores: List[float]
+    ) -> List[Dict[str, Any]]:
         """Format sources for API response.
 
         Args:
@@ -133,12 +133,14 @@ class RAGPipelineOrchestrator:
         """
         sources = []
         for doc, score in zip(documents, scores):
-            sources.append({
-                "content": doc.page_content[:500],
-                "source": doc.metadata.get('source', 'Unknown'),
-                "score": score,
-                "metadata": doc.metadata,
-            })
+            sources.append(
+                {
+                    "content": doc.page_content[:500],
+                    "source": doc.metadata.get("source", "Unknown"),
+                    "score": score,
+                    "metadata": doc.metadata,
+                }
+            )
         return sources
 
     async def process_query(
@@ -148,7 +150,7 @@ class RAGPipelineOrchestrator:
         model: Optional[str] = None,
         top_k: int = 5,
         temperature: float = 0.7,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
         """Process a query through the complete RAG pipeline.
 
@@ -178,27 +180,28 @@ class RAGPipelineOrchestrator:
 
         # Phase 2: Document Retrieval
         retrieval_result = await self.retrieval_strategy.retrieve_async(
-            search_query,
-            top_k=top_k,
-            **kwargs
+            search_query, top_k=top_k, **kwargs
         )
 
         result["sources"] = self._format_sources(
-            retrieval_result.documents,
-            retrieval_result.scores
+            retrieval_result.documents, retrieval_result.scores
         )
         result["metadata"]["retrieval"] = retrieval_result.to_dict()
 
         if retrieval_result.is_empty:
-            result["response"] = "I couldn't find relevant documentation to answer your question. Could you rephrase or provide more context?"
-            result["metadata"]["total_time_ms"] = (time.perf_counter() - start_time) * 1000
+            result["response"] = (
+                "I couldn't find relevant documentation to answer your question. Could you rephrase or provide more context?"
+            )
+            result["metadata"]["total_time_ms"] = (
+                time.perf_counter() - start_time
+            ) * 1000
             return result
 
         # Phase 3: Response Generation
         context = self._format_context(retrieval_result.documents)
 
         # Add web search context if available
-        web_context = retrieval_result.metadata.get('web_search_context')
+        web_context = retrieval_result.metadata.get("web_search_context")
         if web_context:
             context = f"{context}\n\n---\n\n[Web Search Results]\n{web_context}"
 
@@ -224,7 +227,7 @@ class RAGPipelineOrchestrator:
         model: Optional[str] = None,
         top_k: int = 5,
         temperature: float = 0.7,
-        **kwargs
+        **kwargs,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Process a query with streaming response.
 
@@ -239,9 +242,7 @@ class RAGPipelineOrchestrator:
 
         # Phase 2: Document Retrieval
         retrieval_result = await self.retrieval_strategy.retrieve_async(
-            search_query,
-            top_k=top_k,
-            **kwargs
+            search_query, top_k=top_k, **kwargs
         )
 
         # Yield metadata
@@ -253,8 +254,7 @@ class RAGPipelineOrchestrator:
 
         # Yield sources
         sources = self._format_sources(
-            retrieval_result.documents,
-            retrieval_result.scores
+            retrieval_result.documents, retrieval_result.scores
         )
         yield {
             "type": "sources",
@@ -275,7 +275,7 @@ class RAGPipelineOrchestrator:
         # Phase 3: Streaming Response Generation
         context = self._format_context(retrieval_result.documents)
 
-        web_context = retrieval_result.metadata.get('web_search_context')
+        web_context = retrieval_result.metadata.get("web_search_context")
         if web_context:
             context = f"{context}\n\n---\n\n[Web Search Results]\n{web_context}"
 
@@ -303,13 +303,15 @@ def create_default_orchestrator() -> RAGPipelineOrchestrator:
     expanders = []
 
     # Add conversation expander if enabled
-    if getattr(settings, 'conversation_context_enabled', True):
+    if getattr(settings, "conversation_context_enabled", True):
         from app.retrieval.expanders.conversation import ConversationExpander
+
         expanders.append(ConversationExpander())
 
     # Add HyDE expander if enabled
     if settings.hyde_enabled:
         from app.retrieval.expanders.hyde import HyDEExpander
+
         expanders.append(HyDEExpander())
 
     return RAGPipelineOrchestrator(expanders=expanders)

@@ -23,11 +23,9 @@ Platt Scaling Calibration:
 import json
 import logging
 import threading
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-import torch
 from scipy.special import expit  # sigmoid function
 from sentence_transformers import CrossEncoder
 
@@ -37,7 +35,7 @@ except ImportError:
     from langchain.schema import Document
 
 from app.config import settings
-from app.device_utils import get_optimal_device, get_actual_reranker_device
+from app.device_utils import get_optimal_device
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +460,7 @@ class Reranker:
 
         logger.debug(
             f"Reranked {len(documents)} documents, returning top {len(reranked_docs)}"
-            + (f" (calibrated)" if self.calibration_enabled else "")
+            + (" (calibrated)" if self.calibration_enabled else "")
         )
 
         return reranked_docs
@@ -579,9 +577,7 @@ class Reranker:
         """
         self.calibrator = calibrator
         self.calibration_enabled = True
-        logger.info(
-            f"Updated calibrator: a={calibrator.a:.4f}, b={calibrator.b:.4f}"
-        )
+        logger.info(f"Updated calibrator: a={calibrator.a:.4f}, b={calibrator.b:.4f}")
 
     def disable_calibration(self) -> None:
         """Disable Platt scaling calibration."""

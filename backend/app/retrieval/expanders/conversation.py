@@ -28,6 +28,7 @@ class ConversationExpander(BaseExpander):
         """Lazy load to avoid circular imports."""
         if self._expander is None:
             from app.conversation_context import conversation_expander
+
             self._expander = conversation_expander
         return self._expander
 
@@ -39,7 +40,7 @@ class ConversationExpander(BaseExpander):
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        **kwargs
+        **kwargs,
     ) -> Tuple[bool, Optional[str]]:
         """Check if conversation context should be applied."""
         return self._get_expander().should_expand(query, conversation_history)
@@ -48,7 +49,7 @@ class ConversationExpander(BaseExpander):
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        **kwargs
+        **kwargs,
     ) -> ExpansionResult:
         """Expand the query using conversation context synchronously."""
         conv_result = self._get_expander().expand_query(query, conversation_history)
@@ -71,26 +72,26 @@ class ConversationExpander(BaseExpander):
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        **kwargs
+        **kwargs,
     ) -> ExpansionResult:
         """Expand the query using conversation context asynchronously."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None,
-            lambda: self.expand(query, conversation_history=conversation_history)
+            None, lambda: self.expand(query, conversation_history=conversation_history)
         )
 
     def get_config(self) -> Dict[str, Any]:
         return {
             **super().get_config(),
-            "enabled": getattr(settings, 'conversation_context_enabled', True),
-            "history_limit": getattr(settings, 'conversation_context_history_limit', 3),
-            "max_terms": getattr(settings, 'conversation_context_max_terms', 10),
+            "enabled": getattr(settings, "conversation_context_enabled", True),
+            "history_limit": getattr(settings, "conversation_context_history_limit", 3),
+            "max_terms": getattr(settings, "conversation_context_max_terms", 10),
         }
 
     def is_available(self) -> bool:
-        return getattr(settings, 'conversation_context_enabled', True)
+        return getattr(settings, "conversation_context_enabled", True)
 
 
 __all__ = ["ConversationExpander"]

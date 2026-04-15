@@ -5,9 +5,9 @@ This module provides centralized configuration with:
 - Pydantic validation for interdependent settings
 - Security checks for production deployments
 """
+
 import os
 import warnings
-from typing import Any
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
 
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     llm_provider: str = os.getenv("LLM_PROVIDER", "ollama")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-    
+
     # Qdrant
     qdrant_host: str = os.getenv("QDRANT_HOST", "localhost")
     qdrant_port: int = int(os.getenv("QDRANT_PORT", 6333))
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     qdrant_prefer_grpc: bool = os.getenv("QDRANT_PREFER_GRPC", "true").lower() == "true"
     qdrant_timeout: int = int(os.getenv("QDRANT_TIMEOUT", 30))
     qdrant_collection_name: str = os.getenv("QDRANT_COLLECTION_NAME", "devops_docs")
-    
+
     # Redis
     redis_host: str = os.getenv("REDIS_HOST", "localhost")
     redis_port: int = int(os.getenv("REDIS_PORT", 6379))
@@ -54,8 +54,10 @@ class Settings(BaseSettings):
     # Redis Connection Pool
     redis_max_connections: int = int(os.getenv("REDIS_MAX_CONNECTIONS", 50))
     redis_socket_timeout: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", 5.0))
-    redis_socket_connect_timeout: float = float(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", 5.0))
-    
+    redis_socket_connect_timeout: float = float(
+        os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", 5.0)
+    )
+
     # RAG
     chunk_size: int = int(os.getenv("CHUNK_SIZE", 1000))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", 200))
@@ -72,16 +74,26 @@ class Settings(BaseSettings):
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", 768))
 
     # Embedding Cache - cache embeddings to reduce computation
-    embedding_cache_enabled: bool = os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
-    embedding_cache_ttl: int = int(os.getenv("EMBEDDING_CACHE_TTL", 3600))  # TTL in seconds (default: 1 hour)
+    embedding_cache_enabled: bool = (
+        os.getenv("EMBEDDING_CACHE_ENABLED", "true").lower() == "true"
+    )
+    embedding_cache_ttl: int = int(
+        os.getenv("EMBEDDING_CACHE_TTL", 3600)
+    )  # TTL in seconds (default: 1 hour)
 
     # Reranker - Cross-encoder for improved retrieval quality
     reranker_enabled: bool = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
-    reranker_model: str = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker_model: str = os.getenv(
+        "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    )
     # Reranker device - Options: "auto" (recommended), "cuda", "mps", "cpu"
     reranker_device: str = os.getenv("RERANKER_DEVICE", "auto")
-    reranker_top_k: int = int(os.getenv("RERANKER_TOP_K", 5))  # Final results after reranking
-    retrieval_top_k: int = int(os.getenv("RETRIEVAL_TOP_K", 20))  # Initial retrieval before reranking
+    reranker_top_k: int = int(
+        os.getenv("RERANKER_TOP_K", 5)
+    )  # Final results after reranking
+    retrieval_top_k: int = int(
+        os.getenv("RETRIEVAL_TOP_K", 20)
+    )  # Initial retrieval before reranking
     # Max sequence length for cross-encoder. MUST be <=512 for MiniLM-based models
     # (e.g. cross-encoder/ms-marco-MiniLM-L-6-v2) because their BERT backbone only
     # has 512 position embeddings. Setting it higher crashes at inference with
@@ -95,14 +107,22 @@ class Settings(BaseSettings):
     # Reranker Platt Scaling Calibration - converts raw scores to calibrated probabilities
     # Platt scaling formula: P(relevant) = sigmoid(a * score + b)
     # Use ScoreCalibrator.fit() to learn optimal a,b from labeled relevance data
-    reranker_calibration_enabled: bool = os.getenv("RERANKER_CALIBRATION_ENABLED", "false").lower() == "true"
+    reranker_calibration_enabled: bool = (
+        os.getenv("RERANKER_CALIBRATION_ENABLED", "false").lower() == "true"
+    )
     reranker_calibration_a: float = float(os.getenv("RERANKER_CALIBRATION_A", "1.0"))
     reranker_calibration_b: float = float(os.getenv("RERANKER_CALIBRATION_B", "0.0"))
 
     # Hybrid Search - BM25 (sparse) + Vector (dense) with RRF fusion
-    hybrid_search_enabled: bool = os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
-    hybrid_search_alpha: float = float(os.getenv("HYBRID_SEARCH_ALPHA", 0.5))  # Weight for dense vs sparse (0=sparse only, 1=dense only)
-    hybrid_rrf_k: int = int(os.getenv("HYBRID_RRF_K", 60))  # RRF constant (higher = more emphasis on top ranks)
+    hybrid_search_enabled: bool = (
+        os.getenv("HYBRID_SEARCH_ENABLED", "false").lower() == "true"
+    )
+    hybrid_search_alpha: float = float(
+        os.getenv("HYBRID_SEARCH_ALPHA", 0.5)
+    )  # Weight for dense vs sparse (0=sparse only, 1=dense only)
+    hybrid_rrf_k: int = int(
+        os.getenv("HYBRID_RRF_K", 60)
+    )  # RRF constant (higher = more emphasis on top ranks)
     sparse_encoder_model: str = os.getenv("SPARSE_ENCODER_MODEL", "Qdrant/bm25")
 
     # HyDE (Hypothetical Document Embeddings) query expansion
@@ -115,45 +135,87 @@ class Settings(BaseSettings):
     hyde_timeout_seconds: float = float(os.getenv("HYDE_TIMEOUT_SECONDS", "10.0"))
 
     # Conversation Context - use conversation history to improve retrieval for follow-up questions
-    conversation_context_enabled: bool = os.getenv("CONVERSATION_CONTEXT_ENABLED", "true").lower() == "true"
-    conversation_context_history_limit: int = int(os.getenv("CONVERSATION_CONTEXT_HISTORY_LIMIT", "3"))
-    conversation_context_min_query_length: int = int(os.getenv("CONVERSATION_CONTEXT_MIN_QUERY_LENGTH", "5"))
-    conversation_context_max_terms: int = int(os.getenv("CONVERSATION_CONTEXT_MAX_TERMS", "10"))
+    conversation_context_enabled: bool = (
+        os.getenv("CONVERSATION_CONTEXT_ENABLED", "true").lower() == "true"
+    )
+    conversation_context_history_limit: int = int(
+        os.getenv("CONVERSATION_CONTEXT_HISTORY_LIMIT", "3")
+    )
+    conversation_context_min_query_length: int = int(
+        os.getenv("CONVERSATION_CONTEXT_MIN_QUERY_LENGTH", "5")
+    )
+    conversation_context_max_terms: int = int(
+        os.getenv("CONVERSATION_CONTEXT_MAX_TERMS", "10")
+    )
 
     # Conversation Summarization - tiered storage with automatic summarization
-    conversation_summarization_enabled: bool = os.getenv("CONVERSATION_SUMMARIZATION_ENABLED", "false").lower() == "true"
-    conversation_summary_threshold: int = int(os.getenv("CONVERSATION_SUMMARY_THRESHOLD", "10"))  # Messages before summarizing
-    conversation_summary_ttl: int = int(os.getenv("CONVERSATION_SUMMARY_TTL", str(7 * 24 * 3600)))  # 7 days default
-    conversation_recent_ttl: int = int(os.getenv("CONVERSATION_RECENT_TTL", str(24 * 3600)))  # 24 hours default
-    conversation_recent_to_keep: int = int(os.getenv("CONVERSATION_RECENT_TO_KEEP", "5"))  # Messages to keep after summarizing
+    conversation_summarization_enabled: bool = (
+        os.getenv("CONVERSATION_SUMMARIZATION_ENABLED", "false").lower() == "true"
+    )
+    conversation_summary_threshold: int = int(
+        os.getenv("CONVERSATION_SUMMARY_THRESHOLD", "10")
+    )  # Messages before summarizing
+    conversation_summary_ttl: int = int(
+        os.getenv("CONVERSATION_SUMMARY_TTL", str(7 * 24 * 3600))
+    )  # 7 days default
+    conversation_recent_ttl: int = int(
+        os.getenv("CONVERSATION_RECENT_TTL", str(24 * 3600))
+    )  # 24 hours default
+    conversation_recent_to_keep: int = int(
+        os.getenv("CONVERSATION_RECENT_TO_KEEP", "5")
+    )  # Messages to keep after summarizing
 
     # Few-shot learning - include domain-specific examples to improve output consistency and formatting
     few_shot_enabled: bool = os.getenv("FEW_SHOT_ENABLED", "true").lower() == "true"
 
     # Chain-of-thought prompting - inject reasoning scaffolding for complex queries
-    chain_of_thought_enabled: bool = os.getenv("CHAIN_OF_THOUGHT_ENABLED", "true").lower() == "true"
+    chain_of_thought_enabled: bool = (
+        os.getenv("CHAIN_OF_THOUGHT_ENABLED", "true").lower() == "true"
+    )
 
     # Context Compression - extract query-relevant passages to reduce noise and improve context quality
-    context_compression_enabled: bool = os.getenv("CONTEXT_COMPRESSION_ENABLED", "false").lower() == "true"
-    context_compression_use_llm: bool = os.getenv("CONTEXT_COMPRESSION_USE_LLM", "false").lower() == "true"
+    context_compression_enabled: bool = (
+        os.getenv("CONTEXT_COMPRESSION_ENABLED", "false").lower() == "true"
+    )
+    context_compression_use_llm: bool = (
+        os.getenv("CONTEXT_COMPRESSION_USE_LLM", "false").lower() == "true"
+    )
 
     # Web Search Fallback (Tavily) - triggers when local retrieval scores are low
-    web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
+    web_search_enabled: bool = (
+        os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
+    )
     web_search_api_key: str = os.getenv("TAVILY_API_KEY", "")
-    web_search_min_score_threshold: float = float(os.getenv("WEB_SEARCH_MIN_SCORE_THRESHOLD", "0.4"))
+    web_search_min_score_threshold: float = float(
+        os.getenv("WEB_SEARCH_MIN_SCORE_THRESHOLD", "0.4")
+    )
     web_search_max_results: int = int(os.getenv("WEB_SEARCH_MAX_RESULTS", 5))
-    web_search_timeout_seconds: float = float(os.getenv("WEB_SEARCH_TIMEOUT_SECONDS", "10.0"))
-    web_search_include_domains: str = os.getenv("WEB_SEARCH_INCLUDE_DOMAINS", "")  # Comma-separated
-    web_search_exclude_domains: str = os.getenv("WEB_SEARCH_EXCLUDE_DOMAINS", "")  # Comma-separated
+    web_search_timeout_seconds: float = float(
+        os.getenv("WEB_SEARCH_TIMEOUT_SECONDS", "10.0")
+    )
+    web_search_include_domains: str = os.getenv(
+        "WEB_SEARCH_INCLUDE_DOMAINS", ""
+    )  # Comma-separated
+    web_search_exclude_domains: str = os.getenv(
+        "WEB_SEARCH_EXCLUDE_DOMAINS", ""
+    )  # Comma-separated
 
     # Metrics and logging
-    enable_retrieval_metrics: bool = os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
-    log_retrieval_details: bool = os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"
+    enable_retrieval_metrics: bool = (
+        os.getenv("ENABLE_RETRIEVAL_METRICS", "true").lower() == "true"
+    )
+    log_retrieval_details: bool = (
+        os.getenv("LOG_RETRIEVAL_DETAILS", "false").lower() == "true"
+    )
 
     # Output validation and hallucination detection
-    output_validation_enabled: bool = os.getenv("OUTPUT_VALIDATION_ENABLED", "true").lower() == "true"
-    output_validation_min_confidence: float = float(os.getenv("OUTPUT_VALIDATION_MIN_CONFIDENCE", "0.5"))
-    
+    output_validation_enabled: bool = (
+        os.getenv("OUTPUT_VALIDATION_ENABLED", "true").lower() == "true"
+    )
+    output_validation_min_confidence: float = float(
+        os.getenv("OUTPUT_VALIDATION_MIN_CONFIDENCE", "0.5")
+    )
+
     # API
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", 8000))
@@ -172,29 +234,41 @@ class Settings(BaseSettings):
     postgres_pool_size: int = int(os.getenv("POSTGRES_POOL_SIZE", 10))
     postgres_max_overflow: int = int(os.getenv("POSTGRES_MAX_OVERFLOW", 20))
     postgres_pool_timeout: int = int(os.getenv("POSTGRES_POOL_TIMEOUT", 30))
-    postgres_pool_recycle: int = int(os.getenv("POSTGRES_POOL_RECYCLE", 3600))  # Recycle connections after 1 hour
+    postgres_pool_recycle: int = int(
+        os.getenv("POSTGRES_POOL_RECYCLE", 3600)
+    )  # Recycle connections after 1 hour
     postgres_echo_sql: bool = os.getenv("POSTGRES_ECHO_SQL", "false").lower() == "true"
 
     # Query logging - enable/disable PostgreSQL query logging
-    query_logging_enabled: bool = os.getenv("QUERY_LOGGING_ENABLED", "true").lower() == "true"
+    query_logging_enabled: bool = (
+        os.getenv("QUERY_LOGGING_ENABLED", "true").lower() == "true"
+    )
 
     # A/B Testing Configuration
     ab_testing_enabled: bool = os.getenv("AB_TESTING_ENABLED", "true").lower() == "true"
-    ab_testing_auto_record_metrics: bool = os.getenv("AB_TESTING_AUTO_RECORD_METRICS", "true").lower() == "true"
-    ab_testing_default_experiment: str | None = os.getenv("AB_TESTING_DEFAULT_EXPERIMENT") or None
+    ab_testing_auto_record_metrics: bool = (
+        os.getenv("AB_TESTING_AUTO_RECORD_METRICS", "true").lower() == "true"
+    )
+    ab_testing_default_experiment: str | None = (
+        os.getenv("AB_TESTING_DEFAULT_EXPERIMENT") or None
+    )
 
     # Authentication Configuration
     auth_enabled: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
     session_expire_hours: int = int(os.getenv("SESSION_EXPIRE_HOURS", 24))
     api_key_prefix: str = os.getenv("API_KEY_PREFIX", "rag_")
-    require_email_verification: bool = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+    require_email_verification: bool = (
+        os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+    )
 
     # OpenTelemetry Distributed Tracing Configuration
     tracing_enabled: bool = os.getenv("TRACING_ENABLED", "false").lower() == "true"
     # Exporter type: "otlp" for OTLP/gRPC (Jaeger, etc.), "console" for stdout
     tracing_exporter: str = os.getenv("TRACING_EXPORTER", "console")
     # OTLP endpoint for sending traces (default: Jaeger OTLP gRPC port)
-    tracing_otlp_endpoint: str = os.getenv("TRACING_OTLP_ENDPOINT", "http://localhost:4317")
+    tracing_otlp_endpoint: str = os.getenv(
+        "TRACING_OTLP_ENDPOINT", "http://localhost:4317"
+    )
     # Service name for trace identification
     tracing_service_name: str = os.getenv("TRACING_SERVICE_NAME", "devops-ai-assistant")
     # Sampling ratio (0.0 to 1.0) - 1.0 means trace all requests
@@ -203,22 +277,36 @@ class Settings(BaseSettings):
     # Health Check Configuration
     # When false (default), health endpoints hide internal details (hostnames, ports, connection strings)
     # When true, full verbose output is returned (for debugging/development only)
-    health_check_verbose: bool = os.getenv("HEALTH_CHECK_VERBOSE", "false").lower() == "true"
+    health_check_verbose: bool = (
+        os.getenv("HEALTH_CHECK_VERBOSE", "false").lower() == "true"
+    )
 
     # Real-time Analytics Configuration
     analytics_enabled: bool = os.getenv("ANALYTICS_ENABLED", "true").lower() == "true"
-    analytics_short_window_seconds: int = int(os.getenv("ANALYTICS_SHORT_WINDOW_SECONDS", 300))  # 5 minutes
-    analytics_long_window_seconds: int = int(os.getenv("ANALYTICS_LONG_WINDOW_SECONDS", 3600))  # 1 hour
-    analytics_endpoint_protected: bool = os.getenv("ANALYTICS_ENDPOINT_PROTECTED", "false").lower() == "true"
+    analytics_short_window_seconds: int = int(
+        os.getenv("ANALYTICS_SHORT_WINDOW_SECONDS", 300)
+    )  # 5 minutes
+    analytics_long_window_seconds: int = int(
+        os.getenv("ANALYTICS_LONG_WINDOW_SECONDS", 3600)
+    )  # 1 hour
+    analytics_endpoint_protected: bool = (
+        os.getenv("ANALYTICS_ENDPOINT_PROTECTED", "false").lower() == "true"
+    )
     analytics_api_key: str = os.getenv("ANALYTICS_API_KEY", "")
 
     # Semantic Response Cache - caches LLM responses based on semantic similarity
-    semantic_cache_enabled: bool = os.getenv("SEMANTIC_CACHE_ENABLED", "false").lower() == "true"
-    semantic_cache_threshold: float = float(os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.92"))  # Similarity threshold for cache hits
-    semantic_cache_ttl: int = int(os.getenv("SEMANTIC_CACHE_TTL", "3600"))  # Cache TTL in seconds (default: 1 hour)
+    semantic_cache_enabled: bool = (
+        os.getenv("SEMANTIC_CACHE_ENABLED", "false").lower() == "true"
+    )
+    semantic_cache_threshold: float = float(
+        os.getenv("SEMANTIC_CACHE_THRESHOLD", "0.92")
+    )  # Similarity threshold for cache hits
+    semantic_cache_ttl: int = int(
+        os.getenv("SEMANTIC_CACHE_TTL", "3600")
+    )  # Cache TTL in seconds (default: 1 hour)
 
-    @model_validator(mode='after')
-    def validate_interdependent_settings(self) -> 'Settings':
+    @model_validator(mode="after")
+    def validate_interdependent_settings(self) -> "Settings":
         """Validate interdependent configuration settings."""
         errors = []
 
@@ -234,7 +322,7 @@ class Settings(BaseSettings):
             warnings.warn(
                 f"reranker_top_k ({self.reranker_top_k}) is much larger than "
                 f"top_k_results ({self.top_k_results}). Consider reducing reranker_top_k.",
-                UserWarning
+                UserWarning,
             )
 
         # Validate score thresholds are in valid range
@@ -256,11 +344,11 @@ class Settings(BaseSettings):
 
         # Validate embedding dimension matches common models
         known_dimensions = {
-            'bge-base': 768,
-            'bge-small': 384,
-            'bge-large': 1024,
-            'all-MiniLM-L6': 384,
-            'all-mpnet-base': 768,
+            "bge-base": 768,
+            "bge-small": 384,
+            "bge-large": 1024,
+            "all-MiniLM-L6": 384,
+            "all-mpnet-base": 768,
         }
         model_lower = self.embedding_model.lower()
         for model_key, expected_dim in known_dimensions.items():
@@ -268,7 +356,7 @@ class Settings(BaseSettings):
                 warnings.warn(
                     f"embedding_dimension ({self.embedding_dimension}) may not match "
                     f"model {self.embedding_model} (expected {expected_dim})",
-                    UserWarning
+                    UserWarning,
                 )
                 break
 
@@ -280,7 +368,10 @@ class Settings(BaseSettings):
             )
 
         # Validate HyDE query length bounds
-        if self.hyde_enabled and self.hyde_min_query_length >= self.hyde_max_query_length:
+        if (
+            self.hyde_enabled
+            and self.hyde_min_query_length >= self.hyde_max_query_length
+        ):
             errors.append(
                 f"hyde_min_query_length ({self.hyde_min_query_length}) must be less than "
                 f"hyde_max_query_length ({self.hyde_max_query_length})"
@@ -300,7 +391,10 @@ class Settings(BaseSettings):
 
         # Raise all validation errors together
         if errors:
-            raise ValueError("Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+            raise ValueError(
+                "Configuration validation failed:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
 
         return self
 
@@ -317,7 +411,9 @@ class Settings(BaseSettings):
         """Parse CORS_ORIGINS into a list of origins"""
         if not self.cors_origins:
             return ["http://localhost:3000"]
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
 
     class Config:
         env_file = ".env"
@@ -337,7 +433,7 @@ def validate_security_settings(settings_obj: Settings) -> None:
             "SECURITY WARNING: Default or weak PostgreSQL password detected. "
             "Change POSTGRES_PASSWORD for production use.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
     # Check for empty or very short passwords
@@ -346,7 +442,7 @@ def validate_security_settings(settings_obj: Settings) -> None:
             "SECURITY WARNING: PostgreSQL password is too short (< 8 characters). "
             "Use a longer password in production.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
 

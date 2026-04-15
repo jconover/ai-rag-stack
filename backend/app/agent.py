@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.llm_provider import get_llm_provider
-from app.rag import rag_pipeline, _split_messages_for_provider, get_model_context_limit
+from app.rag import rag_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,9 @@ class AgenticRAG:
         conversation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         trace: List[Dict[str, Any]] = []
-        logger.info("AgenticRAG.run query=%r conversation_id=%s", query, conversation_id)
+        logger.info(
+            "AgenticRAG.run query=%r conversation_id=%s", query, conversation_id
+        )
 
         # ---- PLAN -------------------------------------------------------
         sub_queries = await self._plan(query)
@@ -112,7 +114,9 @@ class AgenticRAG:
                             "step": "retrieve",
                             "sub_query": sub,
                             "num_chunks": len(docs),
-                            "web_search_used": getattr(result, "web_search_used", False),
+                            "web_search_used": getattr(
+                                result, "web_search_used", False
+                            ),
                         }
                     )
                     logger.info("agent.retrieve sub_query=%r chunks=%d", sub, len(docs))
@@ -203,7 +207,7 @@ class AgenticRAG:
             "You are a planning assistant for a DevOps documentation RAG system. "
             "Given a user question, decide whether it needs ONE retrieval or several "
             "independent sub-queries (e.g. compound questions spanning multiple tools). "
-            "Return ONLY valid JSON of the form {\"sub_queries\": [\"...\", \"...\"]}. "
+            'Return ONLY valid JSON of the form {"sub_queries": ["...", "..."]}. '
             "Most questions should return a single-element list."
         )
         user = f'User question: "{query}"\n\nReturn JSON only.'
@@ -213,7 +217,9 @@ class AgenticRAG:
             )
             data = _extract_json(raw)
             if isinstance(data, dict) and isinstance(data.get("sub_queries"), list):
-                subs = [s for s in data["sub_queries"] if isinstance(s, str) and s.strip()]
+                subs = [
+                    s for s in data["sub_queries"] if isinstance(s, str) and s.strip()
+                ]
                 if subs:
                     return subs[:4]  # cap
         except Exception as exc:  # noqa: BLE001
@@ -234,7 +240,7 @@ class AgenticRAG:
         system = (
             "You grade documentation snippets for relevance to a user question. "
             "Return ONLY JSON mapping the chunk number (as a string) to a float in [0,1]. "
-            "Example: {\"1\": 0.9, \"2\": 0.2}. Do not include commentary."
+            'Example: {"1": 0.9, "2": 0.2}. Do not include commentary.'
         )
         user = (
             f'Question: "{original_query}"\n\n'
@@ -296,7 +302,9 @@ class AgenticRAG:
         sources: List[Dict[str, Any]] = []
         for i, d in enumerate(docs, start=1):
             source = d.metadata.get("source", "unknown") if d.metadata else "unknown"
-            source_type = d.metadata.get("source_type", "unknown") if d.metadata else "unknown"
+            source_type = (
+                d.metadata.get("source_type", "unknown") if d.metadata else "unknown"
+            )
             context_parts.append(
                 f"[{i}] (source: {source_type} / {source})\n{d.page_content.strip()}"
             )
@@ -335,7 +343,7 @@ class AgenticRAG:
         system = (
             "You are a verifier. Given a question and an answer, decide whether the "
             "answer directly addresses the question. Return ONLY JSON: "
-            "{\"addresses\": true|false, \"reason\": \"short explanation\"}."
+            '{"addresses": true|false, "reason": "short explanation"}.'
         )
         user = f'Question: "{query}"\n\nAnswer:\n{answer}\n\nReturn JSON only.'
         try:

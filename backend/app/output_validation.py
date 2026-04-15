@@ -14,7 +14,7 @@ Key features:
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 class ValidationSeverity(Enum):
     """Severity levels for validation issues."""
+
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
@@ -30,6 +31,7 @@ class ValidationSeverity(Enum):
 @dataclass
 class ValidationIssue:
     """A single validation issue detected in the response."""
+
     code: str  # Machine-readable issue code
     message: str  # Human-readable description
     severity: ValidationSeverity
@@ -40,6 +42,7 @@ class ValidationIssue:
 @dataclass
 class ValidationResult:
     """Complete validation result for an LLM response."""
+
     is_valid: bool = True
     confidence_score: float = 1.0  # 0.0 to 1.0
     issues: List[ValidationIssue] = field(default_factory=list)
@@ -59,14 +62,16 @@ class ValidationResult:
                     "code": issue.code,
                     "message": issue.message,
                     "severity": issue.severity.value,
-                    "snippet": issue.snippet[:100] + "..." if issue.snippet and len(issue.snippet) > 100 else issue.snippet
+                    "snippet": issue.snippet[:100] + "..."
+                    if issue.snippet and len(issue.snippet) > 100
+                    else issue.snippet,
                 }
                 for issue in self.issues
             ],
             "source_citation_count": self.source_citation_count,
             "unsupported_claims_count": self.unsupported_claims_count,
             "hallucination_markers_found": self.hallucination_markers_found,
-            "validation_time_ms": round(self.validation_time_ms, 2)
+            "validation_time_ms": round(self.validation_time_ms, 2),
         }
 
 
@@ -85,7 +90,6 @@ class OutputValidator:
         r"my (training|knowledge) (data|cutoff)",
         r"i cannot browse",
         r"i'?m unable to access",
-
         # Uncertainty indicators
         r"i believe (this|that|it) (may|might|could)",
         r"if i (recall|remember) correctly",
@@ -94,14 +98,12 @@ class OutputValidator:
         r"i'?m not certain",
         r"i cannot guarantee",
         r"this (may|might|could) (not )?be (accurate|correct|up-to-date)",
-
         # Admission of fabrication
         r"i'?m (just )?making (this|an) (assumption|guess)",
         r"i'?m guessing",
         r"this is (just )?my (assumption|speculation|guess)",
         r"i don'?t have (specific|exact|precise) (information|data|details)",
         r"i cannot find (any|specific) (information|documentation|reference)",
-
         # Hedging phrases that often precede hallucinations
         r"(typically|usually|generally),? (i would|one would|you would) expect",
         r"based on (common|general|typical) (practice|patterns|conventions)",
@@ -155,7 +157,8 @@ class OutputValidator:
             re.compile(pattern, re.IGNORECASE) for pattern in self.FABRICATION_PATTERNS
         ]
         self._citation_patterns = [
-            re.compile(pattern, re.IGNORECASE) for pattern in self.SOURCE_CITATION_PATTERNS
+            re.compile(pattern, re.IGNORECASE)
+            for pattern in self.SOURCE_CITATION_PATTERNS
         ]
         self._claim_patterns = [
             re.compile(pattern, re.IGNORECASE) for pattern in self.CLAIM_INDICATORS
@@ -166,7 +169,7 @@ class OutputValidator:
         response: str,
         context: str = "",
         sources: Optional[List[Dict[str, Any]]] = None,
-        query: str = ""
+        query: str = "",
     ) -> ValidationResult:
         """Validate an LLM response for potential issues.
 
@@ -180,6 +183,7 @@ class OutputValidator:
             ValidationResult with detected issues and confidence score
         """
         import time
+
         start_time = time.perf_counter()
 
         result = ValidationResult()
@@ -187,11 +191,13 @@ class OutputValidator:
         if not response:
             result.is_valid = False
             result.confidence_score = 0.0
-            result.issues.append(ValidationIssue(
-                code="EMPTY_RESPONSE",
-                message="Response is empty",
-                severity=ValidationSeverity.ERROR
-            ))
+            result.issues.append(
+                ValidationIssue(
+                    code="EMPTY_RESPONSE",
+                    message="Response is empty",
+                    severity=ValidationSeverity.ERROR,
+                )
+            )
             return result
 
         # Run all validation checks
@@ -206,7 +212,9 @@ class OutputValidator:
         result.confidence_score = self._calculate_confidence_score(result, sources)
 
         # Determine overall validity
-        error_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.ERROR)
+        error_count = sum(
+            1 for issue in result.issues if issue.severity == ValidationSeverity.ERROR
+        )
         result.is_valid = error_count == 0
 
         result.validation_time_ms = (time.perf_counter() - start_time) * 1000
@@ -230,20 +238,26 @@ class OutputValidator:
         length = len(response)
 
         if length < self.MIN_RESPONSE_LENGTH:
-            result.issues.append(ValidationIssue(
-                code="RESPONSE_TOO_SHORT",
-                message=f"Response is too short ({length} chars, minimum {self.MIN_RESPONSE_LENGTH})",
-                severity=ValidationSeverity.WARNING
-            ))
+            result.issues.append(
+                ValidationIssue(
+                    code="RESPONSE_TOO_SHORT",
+                    message=f"Response is too short ({length} chars, minimum {self.MIN_RESPONSE_LENGTH})",
+                    severity=ValidationSeverity.WARNING,
+                )
+            )
 
         if length > self.MAX_RESPONSE_LENGTH:
-            result.issues.append(ValidationIssue(
-                code="RESPONSE_TOO_LONG",
-                message=f"Response exceeds maximum length ({length} chars, maximum {self.MAX_RESPONSE_LENGTH})",
-                severity=ValidationSeverity.WARNING
-            ))
+            result.issues.append(
+                ValidationIssue(
+                    code="RESPONSE_TOO_LONG",
+                    message=f"Response exceeds maximum length ({length} chars, maximum {self.MAX_RESPONSE_LENGTH})",
+                    severity=ValidationSeverity.WARNING,
+                )
+            )
 
-    def _check_hallucination_markers(self, response: str, result: ValidationResult) -> None:
+    def _check_hallucination_markers(
+        self, response: str, result: ValidationResult
+    ) -> None:
         """Detect phrases that often indicate hallucination or uncertainty."""
         for pattern in self._hallucination_patterns:
             matches = pattern.finditer(response)
@@ -251,33 +265,41 @@ class OutputValidator:
                 marker_text = match.group(0)
                 if marker_text not in result.hallucination_markers_found:
                     result.hallucination_markers_found.append(marker_text)
-                    result.issues.append(ValidationIssue(
-                        code="HALLUCINATION_MARKER",
-                        message=f"Detected uncertainty/hallucination marker: '{marker_text}'",
-                        severity=ValidationSeverity.WARNING,
-                        position=match.start(),
-                        snippet=response[max(0, match.start()-20):match.end()+20]
-                    ))
+                    result.issues.append(
+                        ValidationIssue(
+                            code="HALLUCINATION_MARKER",
+                            message=f"Detected uncertainty/hallucination marker: '{marker_text}'",
+                            severity=ValidationSeverity.WARNING,
+                            position=match.start(),
+                            snippet=response[
+                                max(0, match.start() - 20) : match.end() + 20
+                            ],
+                        )
+                    )
 
-    def _check_fabrication_patterns(self, response: str, result: ValidationResult) -> None:
+    def _check_fabrication_patterns(
+        self, response: str, result: ValidationResult
+    ) -> None:
         """Detect patterns that often indicate fabricated content."""
         for pattern in self._fabrication_patterns:
             matches = pattern.finditer(response)
             for match in matches:
-                result.issues.append(ValidationIssue(
-                    code="POTENTIAL_FABRICATION",
-                    message=f"Potentially fabricated detail: '{match.group(0)}'",
-                    severity=ValidationSeverity.INFO,
-                    position=match.start(),
-                    snippet=response[max(0, match.start()-20):match.end()+20]
-                ))
+                result.issues.append(
+                    ValidationIssue(
+                        code="POTENTIAL_FABRICATION",
+                        message=f"Potentially fabricated detail: '{match.group(0)}'",
+                        severity=ValidationSeverity.INFO,
+                        position=match.start(),
+                        snippet=response[max(0, match.start() - 20) : match.end() + 20],
+                    )
+                )
 
     def _check_source_citations(
         self,
         response: str,
         context: str,
         sources: Optional[List[Dict[str, Any]]],
-        result: ValidationResult
+        result: ValidationResult,
     ) -> None:
         """Check for proper source citations in the response."""
         citation_count = 0
@@ -288,11 +310,13 @@ class OutputValidator:
 
         # If context was provided but no citations found, flag it
         if context and citation_count == 0 and len(response) > 200:
-            result.issues.append(ValidationIssue(
-                code="NO_SOURCE_CITATIONS",
-                message="Response uses context but contains no source citations",
-                severity=ValidationSeverity.INFO
-            ))
+            result.issues.append(
+                ValidationIssue(
+                    code="NO_SOURCE_CITATIONS",
+                    message="Response uses context but contains no source citations",
+                    severity=ValidationSeverity.INFO,
+                )
+            )
 
         # Check if cited source numbers are valid
         source_refs = re.findall(r"\[source\s*(\d+)\]", response, re.IGNORECASE)
@@ -301,18 +325,17 @@ class OutputValidator:
             for ref in source_refs:
                 ref_num = int(ref)
                 if ref_num < 1 or ref_num > max_source:
-                    result.issues.append(ValidationIssue(
-                        code="INVALID_SOURCE_REFERENCE",
-                        message=f"Reference [Source {ref_num}] is invalid (only {max_source} sources available)",
-                        severity=ValidationSeverity.ERROR,
-                        snippet=f"[Source {ref_num}]"
-                    ))
+                    result.issues.append(
+                        ValidationIssue(
+                            code="INVALID_SOURCE_REFERENCE",
+                            message=f"Reference [Source {ref_num}] is invalid (only {max_source} sources available)",
+                            severity=ValidationSeverity.ERROR,
+                            snippet=f"[Source {ref_num}]",
+                        )
+                    )
 
     def _check_unsupported_claims(
-        self,
-        response: str,
-        context: str,
-        result: ValidationResult
+        self, response: str, context: str, result: ValidationResult
     ) -> None:
         """Check for claims that may not be supported by the context."""
         if not context:
@@ -328,24 +351,25 @@ class OutputValidator:
         # Check if claims have nearby citations
         for pos, claim in claims_found:
             # Look for citation within 200 chars after the claim
-            following_text = response[pos:pos+200]
-            has_citation = any(p.search(following_text) for p in self._citation_patterns)
+            following_text = response[pos : pos + 200]
+            has_citation = any(
+                p.search(following_text) for p in self._citation_patterns
+            )
 
             if not has_citation:
                 result.unsupported_claims_count += 1
-                result.issues.append(ValidationIssue(
-                    code="UNSUPPORTED_CLAIM",
-                    message=f"Claim may not be supported by context: '{claim}'",
-                    severity=ValidationSeverity.INFO,
-                    position=pos,
-                    snippet=response[max(0, pos-10):pos+len(claim)+50]
-                ))
+                result.issues.append(
+                    ValidationIssue(
+                        code="UNSUPPORTED_CLAIM",
+                        message=f"Claim may not be supported by context: '{claim}'",
+                        severity=ValidationSeverity.INFO,
+                        position=pos,
+                        snippet=response[max(0, pos - 10) : pos + len(claim) + 50],
+                    )
+                )
 
     def _check_context_grounding(
-        self,
-        response: str,
-        context: str,
-        result: ValidationResult
+        self, response: str, context: str, result: ValidationResult
     ) -> None:
         """Check if response is grounded in the provided context.
 
@@ -357,24 +381,77 @@ class OutputValidator:
 
         # Extract significant words (3+ chars, not common stopwords)
         stopwords = {
-            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had',
-            'her', 'was', 'one', 'our', 'out', 'has', 'have', 'been', 'will', 'more',
-            'when', 'who', 'which', 'their', 'said', 'each', 'she', 'how', 'this',
-            'from', 'they', 'with', 'that', 'what', 'were', 'would', 'there', 'about',
-            'into', 'than', 'them', 'could', 'only', 'other', 'then', 'these', 'also',
-            'after', 'before', 'some', 'such', 'very', 'just', 'over', 'made', 'your',
-            'source', 'unknown'
+            "the",
+            "and",
+            "for",
+            "are",
+            "but",
+            "not",
+            "you",
+            "all",
+            "can",
+            "had",
+            "her",
+            "was",
+            "one",
+            "our",
+            "out",
+            "has",
+            "have",
+            "been",
+            "will",
+            "more",
+            "when",
+            "who",
+            "which",
+            "their",
+            "said",
+            "each",
+            "she",
+            "how",
+            "this",
+            "from",
+            "they",
+            "with",
+            "that",
+            "what",
+            "were",
+            "would",
+            "there",
+            "about",
+            "into",
+            "than",
+            "them",
+            "could",
+            "only",
+            "other",
+            "then",
+            "these",
+            "also",
+            "after",
+            "before",
+            "some",
+            "such",
+            "very",
+            "just",
+            "over",
+            "made",
+            "your",
+            "source",
+            "unknown",
         }
 
         # Extract words from context
         context_words = set(
-            word.lower() for word in re.findall(r'\b[a-zA-Z]{3,}\b', context)
+            word.lower()
+            for word in re.findall(r"\b[a-zA-Z]{3,}\b", context)
             if word.lower() not in stopwords
         )
 
         # Extract words from response
         response_words = set(
-            word.lower() for word in re.findall(r'\b[a-zA-Z]{3,}\b', response)
+            word.lower()
+            for word in re.findall(r"\b[a-zA-Z]{3,}\b", response)
             if word.lower() not in stopwords
         )
 
@@ -387,16 +464,16 @@ class OutputValidator:
 
         # If response has very low overlap with context, flag it
         if overlap_ratio < 0.1 and len(response_words) > 20:
-            result.issues.append(ValidationIssue(
-                code="LOW_CONTEXT_GROUNDING",
-                message=f"Response has low overlap with context ({overlap_ratio:.1%} term overlap)",
-                severity=ValidationSeverity.WARNING
-            ))
+            result.issues.append(
+                ValidationIssue(
+                    code="LOW_CONTEXT_GROUNDING",
+                    message=f"Response has low overlap with context ({overlap_ratio:.1%} term overlap)",
+                    severity=ValidationSeverity.WARNING,
+                )
+            )
 
     def _calculate_confidence_score(
-        self,
-        result: ValidationResult,
-        sources: Optional[List[Dict[str, Any]]]
+        self, result: ValidationResult, sources: Optional[List[Dict[str, Any]]]
     ) -> float:
         """Calculate overall confidence score based on validation results.
 
@@ -442,7 +519,7 @@ def validate_response(
     response: str,
     context: str = "",
     sources: Optional[List[Dict[str, Any]]] = None,
-    query: str = ""
+    query: str = "",
 ) -> ValidationResult:
     """Convenience function to validate a response.
 

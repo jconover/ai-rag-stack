@@ -9,7 +9,6 @@ Prometheus metrics: Optional counters for real-time monitoring.
 
 import json
 import uuid
-import statistics
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
@@ -40,22 +39,25 @@ def _init_prometheus_metrics():
 
         try:
             _helpful_counter = Counter(
-                'rag_feedback_helpful_total',
-                'Total thumbs up feedback'
+                "rag_feedback_helpful_total", "Total thumbs up feedback"
             )
             _not_helpful_counter = Counter(
-                'rag_feedback_not_helpful_total',
-                'Total thumbs down feedback'
+                "rag_feedback_not_helpful_total", "Total thumbs down feedback"
             )
             _feedback_total_counter = Counter(
-                'rag_feedback_total',
-                'Total feedback submissions'
+                "rag_feedback_total", "Total feedback submissions"
             )
         except ValueError:
             # Metrics already registered
-            _helpful_counter = REGISTRY._names_to_collectors.get('rag_feedback_helpful_total')
-            _not_helpful_counter = REGISTRY._names_to_collectors.get('rag_feedback_not_helpful_total')
-            _feedback_total_counter = REGISTRY._names_to_collectors.get('rag_feedback_total')
+            _helpful_counter = REGISTRY._names_to_collectors.get(
+                "rag_feedback_helpful_total"
+            )
+            _not_helpful_counter = REGISTRY._names_to_collectors.get(
+                "rag_feedback_not_helpful_total"
+            )
+            _feedback_total_counter = REGISTRY._names_to_collectors.get(
+                "rag_feedback_total"
+            )
 
     except ImportError:
         logging.warning("prometheus_client not installed. Prometheus metrics disabled.")
@@ -71,19 +73,22 @@ feedback_logger.propagate = False
 # Try to set up file handler, fall back to /tmp if permissions fail
 try:
     Path(FEEDBACK_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-    file_handler = logging.FileHandler(FEEDBACK_LOG_PATH, mode='a')
+    file_handler = logging.FileHandler(FEEDBACK_LOG_PATH, mode="a")
 except (PermissionError, OSError):
     FEEDBACK_LOG_PATH = "/tmp/user_feedback.jsonl"
-    file_handler = logging.FileHandler(FEEDBACK_LOG_PATH, mode='a')
-    logging.warning(f"Could not write to original path, using fallback: {FEEDBACK_LOG_PATH}")
+    file_handler = logging.FileHandler(FEEDBACK_LOG_PATH, mode="a")
+    logging.warning(
+        f"Could not write to original path, using fallback: {FEEDBACK_LOG_PATH}"
+    )
 
-file_handler.setFormatter(logging.Formatter('%(message)s'))
+file_handler.setFormatter(logging.Formatter("%(message)s"))
 feedback_logger.addHandler(file_handler)
 
 
 @dataclass
 class FeedbackEntry:
     """Structured feedback data."""
+
     timestamp: str
     feedback_id: str
     session_id: str
@@ -101,7 +106,7 @@ class FeedbackEntry:
         session_id: str,
         helpful: bool,
         message_index: Optional[int] = None,
-        query_hash: Optional[str] = None
+        query_hash: Optional[str] = None,
     ) -> "FeedbackEntry":
         """Create a new feedback entry with generated ID and timestamp."""
         return cls(
@@ -110,7 +115,7 @@ class FeedbackEntry:
             session_id=session_id,
             message_index=message_index,
             helpful=helpful,
-            query_hash=query_hash
+            query_hash=query_hash,
         )
 
 
@@ -122,7 +127,7 @@ class FeedbackLogger:
         session_id: str,
         helpful: bool,
         message_index: Optional[int] = None,
-        query_hash: Optional[str] = None
+        query_hash: Optional[str] = None,
     ) -> FeedbackEntry:
         """Log user feedback to JSON lines file.
 
@@ -139,7 +144,7 @@ class FeedbackLogger:
             session_id=session_id,
             helpful=helpful,
             message_index=message_index,
-            query_hash=query_hash
+            query_hash=query_hash,
         )
 
         feedback_logger.info(entry.to_json())
@@ -160,7 +165,9 @@ class FeedbackLogger:
 feedback_log = FeedbackLogger()
 
 
-def get_feedback_summary(log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100) -> Dict[str, Any]:
+def get_feedback_summary(
+    log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100
+) -> Dict[str, Any]:
     """Read recent feedback and compute summary statistics.
 
     Args:
@@ -171,7 +178,7 @@ def get_feedback_summary(log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100) -
         Summary statistics dictionary
     """
     try:
-        with open(log_path, 'r') as f:
+        with open(log_path, "r") as f:
             lines = f.readlines()
 
         recent_lines = lines[-last_n:] if len(lines) > last_n else lines
@@ -185,9 +192,9 @@ def get_feedback_summary(log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100) -
             try:
                 entry = json.loads(line.strip())
                 total += 1
-                sessions.add(entry.get('session_id'))
+                sessions.add(entry.get("session_id"))
 
-                if entry.get('helpful'):
+                if entry.get("helpful"):
                     helpful_count += 1
                 else:
                     not_helpful_count += 1
@@ -200,7 +207,7 @@ def get_feedback_summary(log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100) -
             "helpful_count": helpful_count,
             "not_helpful_count": not_helpful_count,
             "unique_sessions": len(sessions),
-            "log_path": log_path
+            "log_path": log_path,
         }
 
         if total > 0:
@@ -215,7 +222,7 @@ def get_feedback_summary(log_path: str = FEEDBACK_LOG_PATH, last_n: int = 100) -
             "not_helpful_count": 0,
             "unique_sessions": 0,
             "log_path": log_path,
-            "note": "No feedback logged yet"
+            "note": "No feedback logged yet",
         }
     except Exception as e:
         return {"error": str(e)}

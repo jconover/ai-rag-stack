@@ -65,7 +65,9 @@ class ConversationStorage:
                            Defaults to settings.conversation_recent_to_keep.
         """
         self.redis = get_redis_string_client()
-        self.summary_threshold = summary_threshold or settings.conversation_summary_threshold
+        self.summary_threshold = (
+            summary_threshold or settings.conversation_summary_threshold
+        )
         self.summary_ttl = summary_ttl or settings.conversation_summary_ttl
         self.recent_ttl = recent_ttl or settings.conversation_recent_ttl
         self.recent_to_keep = recent_to_keep or settings.conversation_recent_to_keep
@@ -115,11 +117,13 @@ class ConversationStorage:
             content: The message content
         """
         key = self._messages_key(session_id)
-        message = json.dumps({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.utcnow().isoformat()
-        })
+        message = json.dumps(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
         # Use pipeline for atomic operations
         pipe = self.redis.pipeline()
@@ -144,11 +148,13 @@ class ConversationStorage:
             content: The message content
         """
         key = self._messages_key(session_id)
-        message = json.dumps({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.utcnow().isoformat()
-        })
+        message = json.dumps(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
         pipe = self.redis.pipeline()
         pipe.rpush(key, message)
@@ -201,7 +207,7 @@ class ConversationStorage:
             "summary": summary if summary else None,
             "recent_messages": recent,
             "has_history": summary is not None or len(recent) > 0,
-            "message_count": self.redis.llen(self._messages_key(session_id))
+            "message_count": self.redis.llen(self._messages_key(session_id)),
         }
 
     def get_context_sync(self, session_id: str, max_recent: int = 5) -> Dict:
@@ -223,7 +229,7 @@ class ConversationStorage:
             "summary": summary if summary else None,
             "recent_messages": recent,
             "has_history": summary is not None or len(recent) > 0,
-            "message_count": self.redis.llen(self._messages_key(session_id))
+            "message_count": self.redis.llen(self._messages_key(session_id)),
         }
 
     def get_history(self, session_id: str, limit: int = 10) -> List[Dict]:
@@ -275,12 +281,9 @@ class ConversationStorage:
                     json={
                         "model": settings.ollama_default_model,
                         "messages": [{"role": "user", "content": summary_prompt}],
-                        "options": {
-                            "num_predict": 200,
-                            "temperature": 0.3
-                        },
-                        "stream": False
-                    }
+                        "options": {"num_predict": 200, "temperature": 0.3},
+                        "stream": False,
+                    },
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -325,9 +328,9 @@ class ConversationStorage:
         # Format conversation with truncation for very long messages
         conversation_parts = []
         for m in messages:
-            role = m.get('role', 'unknown').upper()
-            content = m.get('content', '')[:500]  # Truncate long messages
-            if len(m.get('content', '')) > 500:
+            role = m.get("role", "unknown").upper()
+            content = m.get("content", "")[:500]  # Truncate long messages
+            if len(m.get("content", "")) > 500:
                 content += "..."
             conversation_parts.append(f"{role}: {content}")
 

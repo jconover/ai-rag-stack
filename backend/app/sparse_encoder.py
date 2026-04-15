@@ -21,23 +21,18 @@ _sparse_encoder = None
 @dataclass
 class SparseVector:
     """Sparse vector representation with indices and values."""
+
     indices: List[int]
     values: List[float]
 
     def to_dict(self) -> Dict[str, List]:
         """Convert to dictionary format for Qdrant."""
-        return {
-            "indices": self.indices,
-            "values": self.values
-        }
+        return {"indices": self.indices, "values": self.values}
 
     @classmethod
     def from_dict(cls, data: Dict[str, List]) -> "SparseVector":
         """Create from dictionary."""
-        return cls(
-            indices=data.get("indices", []),
-            values=data.get("values", [])
-        )
+        return cls(indices=data.get("indices", []), values=data.get("values", []))
 
 
 class SparseEncoder:
@@ -81,9 +76,7 @@ class SparseEncoder:
             logger.info("Sparse encoder initialized and warmed up")
 
         except ImportError:
-            logger.error(
-                "fastembed not installed. Install with: pip install fastembed"
-            )
+            logger.error("fastembed not installed. Install with: pip install fastembed")
             raise
         except Exception as e:
             logger.error(f"Failed to initialize sparse encoder: {e}")
@@ -107,8 +100,7 @@ class SparseEncoder:
 
         embedding = embeddings[0]
         return SparseVector(
-            indices=embedding.indices.tolist(),
-            values=embedding.values.tolist()
+            indices=embedding.indices.tolist(), values=embedding.values.tolist()
         )
 
     def encode_batch(self, texts: List[str]) -> List[SparseVector]:
@@ -127,10 +119,7 @@ class SparseEncoder:
 
         embeddings = list(self._encoder.embed(texts))
         return [
-            SparseVector(
-                indices=emb.indices.tolist(),
-                values=emb.values.tolist()
-            )
+            SparseVector(indices=emb.indices.tolist(), values=emb.values.tolist())
             for emb in embeddings
         ]
 
@@ -153,7 +142,7 @@ class SparseEncoder:
         return {
             "model_name": self.model_name,
             "initialized": self._initialized,
-            "type": "sparse_bm25"
+            "type": "sparse_bm25",
         }
 
 
@@ -225,7 +214,9 @@ def reciprocal_rank_fusion(
 
     def get_doc_key(doc) -> int:
         """Get unique key for a document based on content."""
-        return hash(doc.page_content[:200] if hasattr(doc, 'page_content') else str(doc)[:200])
+        return hash(
+            doc.page_content[:200] if hasattr(doc, "page_content") else str(doc)[:200]
+        )
 
     # Process dense results
     for rank, (doc, score) in enumerate(dense_results, start=1):

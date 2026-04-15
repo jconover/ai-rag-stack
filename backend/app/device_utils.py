@@ -41,6 +41,7 @@ def _check_torch_available() -> bool:
 
     try:
         import torch  # noqa: F401
+
         _torch_available = True
     except ImportError:
         _torch_available = False
@@ -61,11 +62,16 @@ def _check_cuda_available() -> bool:
 
     try:
         import torch
+
         _cuda_available = torch.cuda.is_available()
         if _cuda_available:
             device_count = torch.cuda.device_count()
-            device_name = torch.cuda.get_device_name(0) if device_count > 0 else "Unknown"
-            logger.info(f"CUDA available: {device_count} device(s) detected ({device_name})")
+            device_name = (
+                torch.cuda.get_device_name(0) if device_count > 0 else "Unknown"
+            )
+            logger.info(
+                f"CUDA available: {device_count} device(s) detected ({device_name})"
+            )
         else:
             logger.debug("CUDA not available")
     except Exception as e:
@@ -87,8 +93,11 @@ def _check_mps_available() -> bool:
 
     try:
         import torch
+
         # MPS support was added in PyTorch 1.12
-        if hasattr(torch.backends, 'mps') and hasattr(torch.backends.mps, 'is_available'):
+        if hasattr(torch.backends, "mps") and hasattr(
+            torch.backends.mps, "is_available"
+        ):
             _mps_available = torch.backends.mps.is_available()
             if _mps_available:
                 logger.info("MPS (Apple Silicon) acceleration available")
@@ -202,6 +211,7 @@ def get_device_info() -> Dict[str, Any]:
     if info["cuda_available"]:
         try:
             import torch
+
             info["cuda_device_count"] = torch.cuda.device_count()
             if info["cuda_device_count"] > 0:
                 info["cuda_device_name"] = torch.cuda.get_device_name(0)
@@ -230,11 +240,13 @@ def log_device_configuration() -> None:
     logger.info("=" * 60)
     logger.info(f"PyTorch available: {info['pytorch_available']}")
     logger.info(f"CUDA available: {info['cuda_available']}")
-    if info['cuda_available']:
+    if info["cuda_available"]:
         logger.info(f"  - Device count: {info['cuda_device_count']}")
         logger.info(f"  - Device name: {info['cuda_device_name']}")
-        if info['cuda_memory_total_gb']:
-            logger.info(f"  - Memory: {info['cuda_memory_free_gb']:.1f} GB free / {info['cuda_memory_total_gb']:.1f} GB total")
+        if info["cuda_memory_total_gb"]:
+            logger.info(
+                f"  - Memory: {info['cuda_memory_free_gb']:.1f} GB free / {info['cuda_memory_total_gb']:.1f} GB total"
+            )
     logger.info(f"MPS available: {info['mps_available']}")
     logger.info(f"Recommended device: {info['recommended_device']}")
     logger.info("-" * 60)
@@ -245,14 +257,20 @@ def log_device_configuration() -> None:
     embedding_actual = get_optimal_device(settings.embedding_device)
     reranker_actual = get_optimal_device(settings.reranker_device)
 
-    if settings.embedding_device != "auto" and embedding_actual != settings.embedding_device:
+    if (
+        settings.embedding_device != "auto"
+        and embedding_actual != settings.embedding_device
+    ):
         logger.warning(
             f"Embedding device '{settings.embedding_device}' not available, "
             f"using '{embedding_actual}' instead"
         )
 
     if settings.reranker_enabled:
-        if settings.reranker_device != "auto" and reranker_actual != settings.reranker_device:
+        if (
+            settings.reranker_device != "auto"
+            and reranker_actual != settings.reranker_device
+        ):
             logger.warning(
                 f"Reranker device '{settings.reranker_device}' not available, "
                 f"using '{reranker_actual}' instead"
@@ -272,6 +290,7 @@ def get_actual_embedding_device() -> str:
         Actual device string being used ("cuda", "mps", or "cpu")
     """
     from app.config import settings
+
     return get_optimal_device(settings.embedding_device)
 
 
@@ -286,4 +305,5 @@ def get_actual_reranker_device() -> str:
         Actual device string being used ("cuda", "mps", or "cpu")
     """
     from app.config import settings
+
     return get_optimal_device(settings.reranker_device)
